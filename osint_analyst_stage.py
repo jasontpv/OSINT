@@ -1,739 +1,645 @@
 #!/usr/bin/env python3
 """
-OSINT Intelligence Analyst Stage
-=================================
-Processes raw JSON results from HARVESTING stage to produce verified intelligence.
+OSINT Analyst Stage - Cross-Verification and Confidence Scoring
 
-Features:
-- Cross-referencing across multiple sources
-- Confidence scoring (Truth Score 0-100%)
-- Intelligent deduplication
-- Privacy mode with local LLMs (Ollama/LM Studio)
-Author: Matt Pumphrey
-Date: 3/16/2026
+This module handles:
+1. Cross-referencing search results with Leak-Lookup breach data
+2. Extracting structured facts from raw JSON ('organic' list)
+3. Calculating confidence scores based on multiple factors
+4. Filtering high-confidence matches for reporting
+
+Key Fixes Implemented:
+- _extract_field now accepts Any type and handles dict/list safely (no AttributeError)
+- extract_facts_from_source drills down into 'organic' list to get link/title/snippet
+- Proper data normalization between HARVESTING and ANALYST stages
 """
 
-import os
-import json
-import hashlib
-import re
-from typing import Any, Dict, List, Optional, Tuple
+import asyncio
+import logging
 from dataclasses import dataclass, field
+from typing import Any, List, Dict, Optional, Union, Set
 from datetime import datetime
-from collections import defaultdict
-from enum import Enum
+import re
+import difflib
 
-# Local LLM integration for privacy mode
-try:
-    from ollama import chat as ollama_chat
-    OLLAMA_AVAILABLE = True
-except ImportError:
-    OLLAMA_AVAILABLE = False
-
-
-class PrivacyMode(Enum):
-    """Privacy levels for analyst operations"""
-    PUBLIC = "public"      # Use cloud LLMs (OpenAI, etc.)
-    LOCAL = "local"        # Use local Ollama/LM Studio
-    HYBRID = "hybrid"      # Mix of both based on sensitivity
-
-
-class ConfidenceLevel(Enum):
-    """Confidence scoring levels"""
-    VERIFIED = 100         # All sources agree (3+ sources)
-    HIGHLY_LIKELY = 85     # Multiple sources agree (2-3 sources)
-    LIKELY = 70            # Single source with strong indicators
-    UNVERIFIED = 45        # Weak or contradictory evidence
-    SUSPICIOUS = 25        # Low-quality or conflicting data
-
-
-@dataclass
-class Fact:
-    """Represents a discovered fact with metadata"""
-    fact_type: str              # e.g., "email", "username", "location"
-    value: str                  # The actual fact value
-    sources: List[str]          # Which tools found this
-    confidence_score: float     # 0-100 truth score
-    context: Dict = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=datetime.now)
+logger = logging.getLogger("osint_analyst")
 
 
 @dataclass 
-class IntelligenceReport:
-    """Consolidated intelligence output"""
-    target_name: str
-    facts: List[Fact]
-    confidence_summary: Dict[str, float]  # Average per fact type
-    analysis_timestamp: datetime = field(default_factory=datetime.now)
+class CrossReferenceResult:
+    """Represents a match between search results and Leak-Lookup findings"""
     
-    def to_json(self) -> str:
-        return json.dumps({
-            "target": self.target_name,
-            "facts": [f.__dict__ for f in self.facts],
-            "confidence_summary": self.confidence_summary,
-            "timestamp": self.analysis_timestamp.isoformat()
-        }, indent=2)
+    target_email: str
+    search_source: str                    # e.g., "Google Dork: email:test@example.com"
+    leaked_databases: List[str]           # Breach databases found from Leak-Lookup
+    confidence_boost: float = 0.3         # Points added to base score
+    
+    def __post_init__(self):
+        if not isinstance(self.leaked_databases, list):
+            self.leaked_databases = [str(self.leaked_databases)]
+
+
+@dataclass 
+class VerifiedFact:
+    """Structured fact with confidence scoring and cross-references"""
+    
+    text: str
+    source: str                           # Combined title + link
+    confidence_score: float              # 0.0 to 1.0
+    is_verified: bool                    # Whether it passed verification
+    cross_references: List[CrossReferenceResult] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
+
+
+class FactExtractor:
+    """
+    Safely extracts structured facts from various data sources
+    
+    Key Feature: Type-safe extraction that handles both dict and list inputs
+    without throwing AttributeError.
+    
+    Handles Serper.dev 'organic' list structure:
+    [
+        {
+            "title": "...",
+            "link": "...", 
+            "snippet": "..."
+        },
+        ...
+    ]
+    """
+    
+        
+    def fuzzy_match_usernames(self, facts: List[Any], threshold: float = 0.8):
+        """Phase 3: Identifies similar usernames using fuzzy matching"""
+        # Filter for items that look like usernames (no @ symbol)
+        usernames = [f for f in facts if hasattr(f, 'text') and "@" not in f.text]
+        for i, f1 in enumerate(usernames):
+            for f2 in usernames[i+1:]:
+                similarity = difflib.SequenceMatcher(None, f1.text, f2.text).ratio()
+                if similarity >= threshold:
+                    f1.text += f" (Likely alias: {f2.text})"
+
+    def apply_confidence_decay(self, fact: Any):
+        """Phase 3: Reduces confidence for older data (5% per year)"""
+        current_year = datetime.now().year
+        if not hasattr(fact, 'text'): return
+        year_match = re.search(r'\b(20\d{2})\b', fact.text)
+        data_year = int(year_match.group(1)) if year_match else current_year
+        
+        years_old = max(0, current_year - data_year)
+        if years_old > 0:
+            penalty = (years_old * 0.05)
+            fact.confidence_score = max(0.1, getattr(fact, 'confidence_score', 0.5) - penalty)
+
+    @staticmethod
+    def _extract_field(data: Any, field_name: str, default: Any = None) -> Optional[Any]:
+        """
+        Type-safe field extraction that handles dict, list, or nested structures
+        
+        This method is crucial for preventing AttributeError when processing
+        potentially malformed JSON responses.
+        
+        Args:
+            data: Input data (can be dict, list, or any type)
+            field_name: Field name to extract
+            default: Default value if extraction fails
+            
+        Returns:
+            Extracted field value or default
+            
+        Safety Features:
+            - Handles both dict and list types without AttributeError
+            - Gracefully handles nested structures
+            - Provides fallback for missing fields
+        """
+        
+        try:
+            # Case 1: Data is a dictionary with the field
+            if isinstance(data, dict):
+                return data.get(field_name, default)
+            
+            # Case 2: Data is a list - extract first element that has the field
+            elif isinstance(data, list):
+                for item in data:
+                    try:
+                        result = FactExtractor._extract_field(item, field_name, None)
+                        if result is not None:
+                            return result
+                    except (AttributeError, TypeError):
+                        continue
+                return default
+            
+            # Case 3: Data is a string - attempt to parse as JSON
+            elif isinstance(data, str):
+                import json
+                try:
+                    parsed = json.loads(data)
+                    return FactExtractor._extract_field(parsed, field_name, default)
+                except (json.JSONDecodeError, TypeError):
+                    # If not valid JSON, return the string itself if it matches field name
+                    return data if field_name == "text" else default
+            
+            # Case 4: Other types - return as-is or default
+            else:
+                return default
+                
+        except AttributeError as e:
+            logger.warning(f"AttributeError during extraction of {field_name}: {e}")
+            return default
+        except Exception as e:
+            logger.warning(f"Unexpected error extracting {field_name}: {e}")
+            return default
+    
+    @staticmethod
+    def extract_facts_from_source(source_data: Union[dict, list], 
+                                  source_type: str = "serper_dev") -> List[VerifiedFact]:
+        """
+        Drill down into search results to extract structured facts
+        
+        This method specifically handles the Serper.dev 'organic' list structure
+        and extracts link, title, snippet as individual facts.
+        
+        Args:
+            source_data: Raw data from search engine (dict or list)
+            source_type: Type of source ("serper_dev", "leak_lookup", etc.)
+            
+        Returns:
+            List of VerifiedFact objects with extracted information
+            
+        Processing Logic:
+            1. Check if 'organic' key exists in response
+            2. Iterate through organic results list
+            3. Extract link, title, snippet for each result
+            4. Create structured facts ready for confidence scoring
+        """
+        
+        facts = []
+        
+        # Step 1: Drill down into 'organic' list if present (Serper.dev format)
+        organic_list = None
+        
+        if isinstance(source_data, dict):
+            # Try to find the 'organic' key at various levels
+            if "organic" in source_data and isinstance(source_data["organic"], list):
+                organic_list = source_data["organic"]
+            elif "results" in source_data and isinstance(source_data["results"], list):
+                organic_list = source_data["results"]
+        elif isinstance(source_data, list):
+            # If already a list, use it directly
+            if len(source_data) > 0 and isinstance(source_data[0], dict):
+                organic_list = source_data
+        
+        # Step 2: Process each result in the organic list
+        if organic_list and isinstance(organic_list, list):
+            for i, result in enumerate(organic_list):
+                
+                try:
+                    # Extract core fields with type-safe methods
+                    link = FactExtractor._extract_field(result, "link", "")
+                    title = FactExtractor._extract_field(result, "title", "")
+                    snippet = FactExtractor._extract_field(result, "snippet", "")
+                    
+                    # Skip empty results
+                    if not link and not title:
+                        continue
+                    
+                    # Create metadata about extraction source
+                    metadata = {
+                        "extraction_index": i,
+                        "source_type": source_type,
+                        "raw_available": True
+                    }
+                    
+                    # Build structured fact
+                    fact_text = f"{title}: {snippet}" if title and snippet else (title or snippet)
+                    
+                    facts.append(VerifiedFact(
+                        text=fact_text.strip()[:500],  # Limit length for performance
+                        source=f"{title} - {link}",    # Combined source identifier
+                        confidence_score=0.6,          # Base score from search engine
+                        is_verified=False,             # Will be updated by cross-checking
+                        metadata=metadata
+                    ))
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to extract fact from result {i}: {e}")
+                    continue
+        
+        return facts
+    
+    @staticmethod
+    def normalize_email(email: str) -> str:
+        """Normalize email for comparison (lowercase, remove dots in Gmail)"""
+        
+        if not isinstance(email, str):
+            return ""
+            
+        normalized = email.lower().strip()
+        
+        # Remove dots from Gmail addresses (gmail.com optimization)
+        if "@gmail.com" in normalized:
+            parts = normalized.split("@")
+            local_part = parts[0].replace(".", "")
+            normalized = f"{local_part}@{parts[-1]}"
+        
+        return normalized
+
+
+class AnalystAgent:
+    """
+    Main orchestrator for the ANALYST stage
+    
+    Performs cross-verification between search results and Leak-Lookup data.
+    Calculates confidence scores with boosts when matches are found.
+    
+    Key Features:
+    - Cross-references search results with breach database findings
+    - Increases confidence score when email matches leak lookup entries
+    - Filters high-confidence matches for reporting
+    """
+    
+    @staticmethod
+    def calculate_confidence_score(fact: VerifiedFact, 
+                                  cross_matches: List[CrossReferenceResult]) -> float:
+        """
+        Calculate final confidence score based on multiple factors
+        
+        Base scoring rules:
+            - Exact email match from search engine: 0.8
+            - Partial domain match: 0.6  
+            - Name-only or snippet match: 0.4
+            
+        Confidence Boosts:
+            + Leak-Lookup correlation (if applicable): +0.3 per matching breach database
+            + Multiple independent sources corroborating: +0.1 each
+            + Verified source reputation: +0.2
+            
+        Final score is clamped between 0 and 1.0
+        
+        Args:
+            fact: The verified fact to score
+            cross_matches: List of matches from Leak-Lookup correlation
+            
+        Returns:
+            Float confidence score (0.0 to 1.0)
+        """
+        
+        # Base score from search engine quality
+        base_score = fact.confidence_score
+        
+        # Apply confidence boost from leak lookup correlation
+        if cross_matches and len(cross_matches) > 0:
+            for match in cross_matches:
+                if isinstance(match, CrossReferenceResult):
+                    # Add boost based on number of breach databases found
+                    num_breaches = len(match.leaked_databases)
+                    
+                    # Cap the boost to avoid over-scoring (max +0.3 per unique database type)
+                    boost = min(0.3 * min(num_breaches, 1), 0.3)
+                    base_score += boost
+                    
+                    logger.info(f"Boosted confidence by {boost} due to leak correlation for {match.target_email}")
+        
+        # Apply source reputation bonus if available in metadata
+        if fact.metadata.get("source_reputation"):
+            base_score += 0.2
+        
+        # Clamp score between 0 and 1
+        final_score = max(0.0, min(1.0, base_score))
+        
+        return round(final_score, 2)
 
 
 class CrossReferenceEngine:
-    """Core engine for cross-referencing data across sources"""
-    
-    # Field type mappings for normalization
-    FIELD_MAPPINGS = {
-        'email': ['email', 'emails', 'e-mail', 'contact_email'],
-        'username': ['username', 'usernames', 'handle', 'social_handle', 'alias'],
-        'location': ['location', 'city', 'country', 'address', 'geolocation'],
-        'bio_keywords': ['bio', 'about', 'description', 'biography'],
-        'phone': ['phone', 'telephone', 'mobile', 'contact_phone'],
-        'company': ['company', 'organization', 'employer', 'affiliation'],
-        'ip_addresses': ['ip', 'ips', 'network_ips', 'associated_ips'],
-    }
+    """Handles cross-matching search results with Leak-Lookup findings"""
     
     def __init__(self):
-        self.source_cache: Dict[str, List[Fact]] = defaultdict(list)
-
-    def extract_facts_from_source(self, source_data: Any, tool_name: str) -> List[Fact]:
-        """Extract structured facts from raw tool output (Handles Lists and Serper.dev JSON structure)
+        self.email_normalizer = FactExtractor()
+        self.max_boost_per_target = 0.3
+    
+    def perform_cross_reference(self, 
+                               search_results: List[dict],
+                               leak_lookup_findings: List[dict]) -> Dict[str, List[CrossReferenceResult]]:
+        """
+        Cross-reference search results with Leak-Lookup breach data
         
-        This method handles various input formats including:
-        - Direct list of result dictionaries
-        - Dictionary with 'organic' key containing search results (Serper.dev format)
-        - Nested data structures
+        This is the core logic that increases confidence scores when an email found
+        in a search result matches an entry found in Leak-Lookup.
         
         Args:
-            source_data: Any type of data structure (dict, list, or single item)
-            tool_name: Name of the tool that produced this data
+            search_results: List of dicts from HARVESTING stage (with link/title/snippet)
+            leak_lookup_findings: List of dicts from Leak-Lookup API
             
         Returns:
-            List[Fact]: Extracted facts from the source data
+            Dictionary mapping email targets to list of cross-reference results
         """
-        extracted = []
         
-        # Handle Serper.dev JSON structure - extract 'organic' list first if present
-        # This is critical for properly parsing Google Search results
-        if isinstance(source_data, dict) and 'organic' in source_data:
-            items_to_process = source_data['organic']
-        elif isinstance(source_data, list):
-            items_to_process = source_data
-        else:
-            # Convert single item to list for processing
-            items_to_process = [source_data] if not isinstance(source_data, dict) or not self._is_empty_dict(source_data) else []
-
-        for item in items_to_process:
-            if not isinstance(item, dict):
+        # Index leak lookup findings by normalized email for fast lookup
+        leak_index = self._index_leak_findings(leak_lookup_findings)
+        
+        # Map search result emails to their sources
+        search_emails = self._extract_search_emails(search_results)
+        
+        # Perform cross-matching
+        cross_references: Dict[str, List[CrossReferenceResult]] = {}
+        
+        for email, sources in search_emails.items():
+            normalized_email = self.email_normalizer.normalize_email(email)
+            
+            if normalized_email in leak_index:
+                leak_data = leak_index[normalized_email]
+                
+                # Create cross-reference result with boost information
+                match_result = CrossReferenceResult(
+                    target_email=email,
+                    search_source=f"Google Dork: {sources[0]}",  # First source
+                    leaked_databases=leak_data.get('databases', []),
+                    confidence_boost=self.max_boost_per_target
+                )
+                
+                cross_references[email] = [match_result]
+        
+        return cross_references
+    
+    def _index_leak_findings(self, leak_findings: List[dict]) -> Dict[str, dict]:
+        """Create lookup index from Leak-Lookup results"""
+        
+        index = {}
+        
+        for finding in leak_findings:
+            if isinstance(finding, dict):
+                target = fact_extractor._extract_field(finding, "target", "")
+                databases = fact_extractor._extract_field(finding, "breached_databases", [])
+                
+                if target and not isinstance(databases, list):
+                    databases = [str(databases)]
+                
+                normalized = self.email_normalizer.normalize_email(target)
+                
+                index[normalized] = {
+                    'target': target,
+                    'databases': databases or []
+                }
+        
+        return index
+    
+    def _extract_search_emails(self, search_results: List[dict]) -> Dict[str, List[str]]:
+        """Extract emails from search results and their sources"""
+        
+        email_sources = {}  # email -> list of dork sources
+        
+        for result in search_results:
+            if not isinstance(result, dict):
                 continue
-
-            # 1. Email extraction
-            emails = self._extract_field(item, ['email', 'emails'])
-            for email in emails:
-                extracted.append(Fact(fact_type='email', value=email, sources=[tool_name], confidence_score=90.0))
+                
+            link = fact_extractor._extract_field(result, "link", "")
+            title = fact_extractor._extract_field(result, "title", "")
             
-            # 2. Username extraction
-            usernames = self._extract_field(item, ['username', 'handle', 'title'])
-            for username in usernames:
-                extracted.append(Fact(fact_type='username', value=username, sources=[tool_name], confidence_score=85.0))
+            if not link or not title:
+                continue
             
-            # 3. Location extraction
-            locations = self._extract_field(item, ['location', 'city', 'country'])
-            for loc in locations:
-                extracted.append(Fact(fact_type='location', value=loc, sources=[tool_name], confidence_score=80.0))
+            # Extract email from URL or title (simplified extraction)
+            emails_in_result = self._find_emails_in_text(link + " " + title)
             
-            # 4. Company extraction
-            companies = self._extract_field(item, ['company', 'organization'])
-            for company in companies:
-                extracted.append(Fact(fact_type='company', value=company, sources=[tool_name], confidence_score=90.0))
-            
-            # 5. IP addresses extraction
-            ips = self._extract_field(item, ['ip', 'ips', 'network_ips'])
-            for ip in ips:
-                extracted.append(Fact(fact_type='ip_addresses', value=ip, sources=[tool_name], confidence_score=98.0))
-            
-            # 6. EVIDENCE LINKS
-            links = self._extract_field(item, ['link', 'url'])
-            for link in links:
-                extracted.append(Fact(fact_type='source_link', value=link, sources=[tool_name], confidence_score=100.0))
-
-            # 7. Bio/Keywords - handle Serper.dev 'snippet' field
-            bio_text = self._extract_field(item, ['bio', 'about', 'description', 'snippet'])
-            if bio_text:
-                # Joining if bio_text is a list
-                value_str = " ".join(bio_text) if isinstance(bio_text, list) else str(bio_text)
-                extracted.append(Fact(fact_type='bio_keywords', value=value_str, sources=[tool_name], confidence_score=75.0, context={"raw_bio": value_str}))
-
-        return extracted
+            for email in emails_in_result:
+                normalized = self.email_normalizer.normalize_email(email)
+                
+                if normalized not in email_sources:
+                    email_sources[normalized] = []
+                
+                email_sources[normalized].append(f"{title} - {link}")
         
-    def _is_empty_dict(self, data: Any) -> bool:
-        """Check if the data is an empty or nearly-empty dictionary"""
-        if not isinstance(data, dict):
-            return False
-        # Consider it "empty" if it has no meaningful keys for processing
-        meaningful_keys = {'organic', 'data', 'results', 'items'}
-        return all(key.lower() not in str(k).lower() for k in data.keys())
-
-    def normalize_field_name(self, field_name: str) -> str:
-        """Normalize various field names to standard types"""
-        field_lower = field_name.lower().strip()
-        for fact_type, variations in self.FIELD_MAPPINGS.items():
-            if any(variation in field_lower for variation in variations):
-                return fact_type
-        return "other"
-
-    def _extract_field(self, source_data: Any, field_patterns: List[str]) -> List[str]:
-        """Extract field values using multiple patterns
+        return email_sources
+    
+    @staticmethod
+    def _find_emails_in_text(text: str) -> List[str]:
+        """Find email addresses in text using regex"""
         
-        This method handles both string and list values robustly.
-        
-        Args:
-            source_data: The data structure to extract from (must be dict-like for get())
-            field_patterns: List of possible field names to search for
-            
-        Returns:
-            List[str]: Extracted field values as strings
-        """
-        results = []
-        
-        # Ensure we're working with a dict for the first extraction attempt
-        if not isinstance(source_data, dict):
+        if not isinstance(text, str):
             return []
             
-        for pattern in field_patterns:
-            value = source_data.get(pattern)
-            if value is None:
-                continue
-                
-            if isinstance(value, str):
-                results.append(value)
-            elif isinstance(value, list):
-                # Convert each item to string, filtering out non-string items
-                for item in value:
-                    try:
-                        results.append(str(item))
-                    except (TypeError, ValueError):
-                        continue
+        pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        matches = re.findall(pattern, text)
         
-        # Also search nested keys - handle various nesting levels
-        if 'data' in source_data and isinstance(source_data['data'], dict):
-            for pattern in field_patterns:
-                if pattern in source_data['data']:
-                    value = source_data['data'][pattern]
-                    if isinstance(value, str):
-                        results.append(value)
-                    elif isinstance(value, list):
-                        for item in value:
-                            try:
-                                results.append(str(item))
-                            except (TypeError, ValueError):
-                                continue
+        # Filter for valid-looking emails
+        valid_emails = [email for email in matches 
+                       if len(email.split('@')[1]) >= 2]
         
-        # Additional search in 'organic' key (for Serper.dev results that might be nested deeper)
-        if 'organic' in source_data and isinstance(source_data['organic'], list):
-            for item in source_data['organic'][:5]:  # Limit to first 5 items
-                if not isinstance(item, dict):
-                    continue
-                for pattern in field_patterns:
-                    value = item.get(pattern)
-                    if value is None:
-                        continue
-                    if isinstance(value, str):
-                        results.append(value)
-                    elif isinstance(value, list):
-                        for subitem in value:
-                            try:
-                                results.append(str(subitem))
-                            except (TypeError, ValueError):
-                                pass
-        
-        return [r.strip() for r in results if r and len(r.strip()) > 0]
+        return list(set(valid_emails))
+
+
+def verify_search_results(search_results: List[dict], 
+                         leak_lookup_findings: List[dict],
+                         min_confidence_threshold: float = 0.6) -> dict:
+    """
+    Main verification function for the ANALYST stage
     
-    def cross_reference(self, all_facts: List[Tuple[str, Dict]]) -> List[Fact]:
-        """Cross-reference facts across multiple sources"""
-        all_extracted = []
+    This is the primary interface used by the Kanban Manager's ANALYST stage.
+    
+    Key Improvements:
+    - Properly drills down into 'organic' list to extract link/title/snippet as Facts
+    - Type-safe extraction handles dict/list without AttributeError  
+    - Cross-references with Leak-Lookup to boost confidence scores
+    - Returns structured results ready for SCRIBE stage
+    
+    Args:
+        search_results: List of dicts from HARVESTING (with link, title, snippet)
+        leak_lookup_findings: List of dicts from Leak-Lookup API
+        min_confidence_threshold: Minimum score to include in output
         
-        # Extract facts from each source
-        for tool_name, source_data in all_facts:
-            extracted = self.extract_facts_from_source(source_data, tool_name)
-            all_extracted.extend(extracted)
-            
-            # Cache for later deduplication
-            for fact in extracted:
-                self.source_cache[fact.fact_type].append(fact)
+    Returns:
+        dict with keys:
+            - verified_results: List of VerifiedFact objects
+            - cross_references: List of CrossReferenceResult matches
+            - high_confidence_count: Number of results above threshold
+    """
+    
+    # Extract facts from search results (drill down into organic list)
+    raw_facts = []
+    
+    for result in search_results:
+        if isinstance(result, dict):
+            facts = FactExtractor.extract_facts_from_source(
+                source_data=result,
+                source_type="serper_dev"
+            )
+            raw_facts.extend(facts)
+    
+    logger.info(f"Extracted {len(raw_facts)} facts from search results")
+    
+    # Perform cross-referencing with Leak-Lookup data
+    engine = CrossReferenceEngine()
+    match_map = engine.perform_cross_reference(search_results, leak_lookup_findings)
+    
+    # Calculate confidence scores and apply boosts
+    verified_facts: List[VerifiedFact] = []
+    all_cross_references: List[CrossReferenceResult] = []
+    
+    for fact in raw_facts:
+        # Find matching cross-references for this fact's source
+        matching_matches = [
+            match for match in match_map.values() 
+            if any(fact.source.startswith(src) or match.target_email in fact.text 
+                   for src in match.search_source.split(":"))
+        ]
         
-        # Now cross-reference and assign confidence scores
-        final_facts = []
-        for fact_type, facts in self.source_cache.items():
-            if not facts:
-                continue
-            
-            # Group by value (for deduplication)
-            value_groups = defaultdict(list)
-            for fact in facts:
-                value_groups[fact.value].append(fact)
-            
-            # Create consolidated facts with confidence scoring
-            for value, matching_facts in value_groups.items():
-                num_sources = len(matching_facts)
-                
-                # Calculate confidence based on source agreement
-                if num_sources >= 3:    
-                    confidence = ConfidenceLevel.VERIFIED.value
-                elif num_sources == 2:
-                    confidence = ConfidenceLevel.HIGHLY_LIKELY.value
-                else:
-                    confidence = ConfidenceLevel.LIKELY.value
-                
-                # Adjust confidence based on data quality indicators
-                final_confidence = self._adjust_confidence(confidence, matching_facts)
-                
-                consolidated = Fact(
-                    fact_type=fact_type,
-                    value=value,
-                    sources=[f.sources[0] for f in matching_facts],  # Unique source names
-                    confidence_score=final_confidence,
-                    context={
-                        "source_count": num_sources,
-                        "original_source_names": list(set(f.sources[0] for f in matching_facts))
+        # Calculate final confidence score with boost from leak correlation
+        final_score = AnalystAgent.calculate_confidence_score(
+            fact=fact,
+            cross_matches=matching_matches
+        )
+        
+        # Create verified fact with updated scoring
+        verified_fact = VerifiedFact(
+            text=fact.text,
+            source=fact.source,
+            confidence_score=final_score,
+            is_verified=final_score >= min_confidence_threshold,
+            cross_references=list(matching_matches),
+            metadata={**fact.metadata, "cross_ref_count": len(matching_matches)}
+        )
+        
+        verified_facts.append(verified_fact)
+        all_cross_references.extend(matching_matches)
+    
+
+
+    # --- PHASE 3: FORENSIC TRIGGER ---
+    fact_extractor.fuzzy_match_usernames(verified_facts)
+    for fact in verified_facts:
+        fact_extractor.apply_confidence_decay(fact)
+    # ---------------------------------
+
+    # Filter results by confidence threshold for output
+    high_confidence = [f for f in verified_facts if f.confidence_score >= min_confidence_threshold]
+   
+    return {
+        "verified_results": [
+            {
+                "text": fact.text,
+                "source": fact.source,
+                "confidence_score": fact.confidence_score,
+                "is_verified": fact.is_verified,
+                "cross_references": [
+                    {
+                        "target_email": cr.target_email,
+                        "search_source": cr.search_source,
+                        "leaked_databases": cr.leaked_databases,
+                        "confidence_boost": cr.confidence_boost
                     }
-                )
-                final_facts.append(consolidated)
-        
-        # Clear cache after processing
-        self.source_cache.clear()
-        
-        return final_facts
-    
-    def _adjust_confidence(self, base_score: float, facts: List[Fact]) -> float:
-        """Adjust confidence based on additional quality indicators"""
-        score = float(base_score)
-        
-        # Boost for high-quality sources (tools with good reputation)
-        quality_sources = {'shodan', 'builtwith'}
-        if all(f.sources[0].lower() in quality_sources for f in facts):
-            score += 5
-        
-        # Reduce confidence for contradictory data
-        values = [f.value.lower() for f in facts]
-        unique_values = len(set(values))
-        if unique_values > len(values) * 0.5:  # More than half are different
-            score -= 20
-        
-        return max(10, min(100, score))
-
-
-class LLMAnalyzer:
-    """Privacy-mode aware LLM analyzer for intelligence extraction"""
-    
-    def __init__(self):
-        self.privacy_mode = PrivacyMode.LOCAL if OLLAMA_AVAILABLE else PrivacyMode.PUBLIC
-        
-    def set_privacy_mode(self, mode: str) -> None:
-        """Set the privacy mode"""
-        if mode.lower() == 'local':
-            if not OLLAMA_AVAILABLE:
-                print("Warning: Ollama not available. Switching to public mode.")
-                self.privacy_mode = PrivacyMode.PUBLIC
-            else:
-                self.privacy_mode = PrivacyMode.LOCAL
-        elif mode.lower() == 'public':
-            self.privacy_mode = PrivacyMode.PUBLIC
-        elif mode.lower() == 'hybrid':
-            self.privacy_mode = PrivacyMode.HYBRID
-    
-    def analyze_bio_keywords(self, bio_text: str) -> Dict[str, List[str]]:
-        """Extract keywords from bio text using local LLM for privacy"""
-        if self.privacy_mode in [PrivacyMode.LOCAL, PrivacyMode.HYBRID] and OLLAMA_AVAILABLE:
-            return self._local_llm_analysis(bio_text)
-        else:
-            # Use heuristic-based extraction (public mode fallback)
-            return self._heuristic_extraction(bio_text)
-    
-    def _local_llm_analysis(self, bio_text: str) -> Dict[str, List[str]]:
-        """Use Ollama for keyword extraction (privacy-focused)"""
-        try:
-            response = ollama_chat(
-                model='mistral',  
-                messages=[{
-                    'role': 'system',
-                    'content': '''You are an OSINT analysis assistant. Extract the following from the bio text:
-1. SKILLS - List any professional skills mentioned
-2. INTERESTS - List personal interests or hobbies
-3. LOCATIONS - Any locations, cities, countries mentioned
-4. ORGANIZATIONS - Companies, schools, organizations mentioned
-
-Format your response as JSON with keys: "skills", "interests", "locations", "organizations"'''
-                }, {
-                    'role': 'user',
-                    'content': bio_text[:500] 
-                }]
-            )   
-            
-            # Parse the JSON response
-            if isinstance(response, dict) and 'message' in response:
-                msg_content = response['message']['content']
-                try:
-                    return json.loads(msg_content)
-                except json.JSONDecodeError:
-                    print(f"Warning: Could not parse LLM output. Raw: {msg_content}")
-                    
-            return {"skills": [], "interests": [], "locations": [], "organizations": []}
-            
-        except Exception as e:
-            print(f"Local LLM analysis failed: {e}. Falling back to heuristics.")
-            return self._heuristic_extraction(bio_text)
-    
-    def _heuristic_extraction(self, bio_text: str) -> Dict[str, List[str]]:
-        """Basic keyword extraction without LLM (fallback for public mode)"""
-        # Convert to lowercase for processing
-        text = bio_text.lower()
-        
-        return {
-            "skills": self._extract_skills(text),
-            "interests": self._extract_interests(text),
-            "locations": self._extract_locations(text),
-            "organizations": self._extract_organizations(text)
-        }
-    
-    def _extract_skills(self, text: str) -> List[str]:
-        """Extract skills using keyword patterns"""
-        skill_patterns = [
-            r'\b(programming|python|javascript|java|c\+\+|rust)\b',
-            r'\b(machine learning|ai|data science)\b',
-            r'\b(analysis|research|investigation)\b',
-            r'\b(management|leadership|team lead)\b',
-        ]
-        
-        skills = []
-        for pattern in skill_patterns:
-            matches = re.findall(pattern, text)
-            skills.extend(matches)
-        
-        return list(set(skills))
-    
-    def _extract_interests(self, text: str) -> List[str]:
-        """Extract interests from bio"""
-        interest_keywords = ['hobby', 'interest', 'passion', 'love', 'enjoy']
-        interests = []
-        for keyword in interest_keywords:
-            if keyword in text:
-                # Look at surrounding words (up to 10 before/after)
-                start = max(0, text.find(keyword) - 20)
-                end = min(len(text), text.find(keyword) + 30)
-                phrase = text[start:end].strip()
-                if len(phrase) > 5:
-                    interests.append(phrase[:100])
-        
-        return list(set(interests))[:5]
-    
-    def _extract_locations(self, text: str) -> List[str]:
-        """Extract location mentions"""
-        # Common city/country patterns (simplified)
-        locations = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', text)
-        return [loc for loc in locations if len(loc.split()) == 1 and len(loc) > 2][:5]
-    
-    def _extract_organizations(self, text: str) -> List[str]:
-        """Extract organization/company names"""
-        org_patterns = [
-            r'\b(Inc\.|Corp\.|LLC|Ltd\.|Co\.)',
-            r'@[\w.-]+(?:\.\w{2,})+',  # Email domains as proxy for orgs
-        ]
-        
-        orgs = []
-        text_lower = text.lower()
-        
-        # Check for common company indicators
-        if any(org in text_lower for org in ['company', 'organization', 'at']):
-            # Try to extract following words (simplified)
-            start_idx = 0
-            while True:
-                idx = text.find(' at ', start_idx)
-                if idx == -1:
-                    break
-                end_idx = idx + 50
-                potential_org = text[idx+4:end_idx].split()[0] if text[idx+4:end_idx] else ''
-                if len(potential_org) > 2:
-                    orgs.append(potential_org)
-                start_idx = idx + 1
-        
-        return list(set(orgs))[:5]
-
-
-class DeduplicationEngine:
-    """Intelligent deduplication for merging duplicate records"""
-    
-    def __init__(self):
-        self.fingerprint_cache = {}
-        
-    def generate_fingerprint(self, fact: Fact) -> str:
-        """Generate a unique fingerprint for deduplication comparison"""
-        # Normalize the value for comparison
-        normalized_value = fact.value.lower().strip()
-        
-        if fact.fact_type == 'email':
-            # Email normalization (remove dots for gmail, lowercase)
-            if '@gmail.com' in normalized_value:
-                username, domain = normalized_value.split('@')
-                username_clean = username.replace('.', '')
-                normalized_value = f"{username_clean}@{domain}"
-        
-        # Generate hash fingerprint
-        return hashlib.md5(f"fact_{fact.fact_type}_{normalized_value}".encode()).hexdigest()
-    
-    def merge_duplicates(self, facts: List[Fact]) -> List[Fact]:
-        """Merge duplicate facts using fuzzy matching"""
-        merged = {}  # key by fact_type + normalized value
-        
-        for fact in facts:
-            fingerprint = self.generate_fingerprint(fact)
-            
-            if fingerprint in merged:
-                existing = merged[fingerprint]
-                
-                # Merge sources (avoid duplicates)
-                new_sources = [s for s in fact.sources if s not in existing.sources]
-                all_sources = list(set(existing.sources + new_sources))
-                
-                # Average confidence scores
-                avg_confidence = (existing.confidence_score * len(existing.sources) + 
-                                fact.confidence_score * len(fact.sources)) / \
-                               (len(all_sources) if all_sources else 1)
-                
-                # Merge context information
-                existing.context['merged'] = True
-                existing.context['source_count'] = len(all_sources)
-                existing.context['all_source_names'] = list(set(existing.context.get('all_source_names', []) + new_sources))
-                existing.confidence_score = avg_confidence
-                
-            else:
-                merged[fingerprint] = fact
-        
-        return list(merged.values())
-
-
-class OSINTAnalystStage:
-    """Main analyst stage orchestrator"""
-    
-    def __init__(self, privacy_mode: str = 'local'):
-        self.cross_reference_engine = CrossReferenceEngine()
-        self.llm_analyzer = LLMAnalyzer()
-        self.deduplication_engine = DeduplicationEngine()
-        
-        # Set privacy mode
-        self.llm_analyzer.set_privacy_mode(privacy_mode)
-        
-        # Configuration
-        self.output_dir = os.path.join(os.getcwd(), 'analyst_output')
-        os.makedirs(self.output_dir, exist_ok=True)
-    
-    def process_harvest_results(self, raw_data: Dict[str, List[Dict]]) -> IntelligenceReport:
-        """Process raw harvesting results through analyst pipeline"""
-        
-        print(f"\n{'='*60}")
-        print("🔍 OSINT ANALYST STAGE - Starting Analysis")
-        print(f"Privacy Mode: {self.llm_analyzer.privacy_mode.value}")
-        print(f"{'='*60}\n")
-        
-        # Step 1: Cross-reference all sources
-        print("[1/4] Cross-referencing data across sources...")
-        cross_reference_facts = self.cross_reference_engine.cross_reference(
-            list(raw_data.items())
-        )
-        print(f"      Found {len(cross_reference_facts)} unique facts from {len(raw_data)} sources\n")
-        
-        # Step 2: Apply deduplication
-        print("[2/4] Deduplicating records...")
-        deduplicated = self.deduplication_engine.merge_duplicates(cross_reference_facts)
-        print(f"      Reduced to {len(deduplicated)} unique facts (merged duplicates)\n")
-        
-        # Step 3: LLM-enhanced analysis (privacy mode aware)
-        print("[3/4] Enhancing with local LLM analysis...")
-        enhanced_facts = self._enhance_with_llm(deduplicated)
-        print(f"      Keywords extracted from bio data\n")
-        
-        # Step 4: Generate confidence summary
-        print("[4/4] Calculating confidence metrics...")
-        target_name = raw_data.get('_target', 'unknown')
-        report = IntelligenceReport(
-            target_name=target_name,
-            facts=enhanced_facts,
-            confidence_summary=self._calculate_confidence_summary(enhanced_facts)
-        )
-        
-        print(f"\n✅ Analysis complete for: {target_name}")
-        return report
-    
-    def _enhance_with_llm(self, facts: List[Fact]) -> List[Fact]:
-        """Enhance facts with LLM-extracted keywords (privacy mode aware)"""
-        enhanced = []
-        
-        for fact in facts:
-            if fact.fact_type == 'bio_keywords' and fact.context.get('raw_bio'):
-                # Extract structured keywords using local LLM
-                bio_text = fact.context['raw_bio']
-                extracted = self.llm_analyzer.analyze_bio_keywords(bio_text)
-                
-                # Add to facts list
-                for keyword_type in ['skills', 'interests', 'locations', 'organizations']:
-                    if extracted.get(keyword_type):
-                        enhanced.append(Fact(
-                            fact_type=keyword_type,
-                            value=", ".join(extracted[keyword_type]),
-                            sources=fact.sources,
-                            confidence_score=70.0,  # LLM-assigned baseline
-                            context={"extraction_method": "local_llm"}
-                        ))
-            
-            enhanced.append(fact)
-        
-        return enhanced
-    
-    def _calculate_confidence_summary(self, facts: List[Fact]) -> Dict[str, float]:
-        """Calculate average confidence by fact type"""
-        type_scores = defaultdict(list)
-        
-        for fact in facts:
-            type_scores[fact.fact_type].append(fact.confidence_score)
-        
-        summary = {
-            ft: round(sum(scores) / len(scores), 1) 
-            for ft, scores in type_scores.items()
-        }
-        
-        return summary
-    
-    def save_report(self, report: IntelligenceReport, filename: Optional[str] = None) -> str:
-        """Save intelligence report to file"""
-        if not filename:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            safe_name = re.sub(r'[^\w\-]', '_', report.target_name)[:50]
-            filename = f"analyst_report_{safe_name}_{timestamp}.json"
-        
-        filepath = os.path.join(self.output_dir, filename)
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(report.to_json())
-        
-        print(f"\n📄 Report saved to: {filepath}")
-        return filepath
-    
-    def display_summary(self, report: IntelligenceReport):
-        """Display analysis summary in terminal"""
-        print("\n" + "="*60)
-        print("INTELLIGENCE ANALYSIS SUMMARY")
-        print("="*60)
-        
-        print(f"\nTarget: {report.target_name}")
-        print(f"Analysis Date: {report.analysis_timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Privacy Mode: {self.llm_analyzer.privacy_mode.value.upper()}")
-        
-        print("\n📊 FACTS BY TYPE:")
-        type_counts = defaultdict(int)
-        for fact in report.facts:
-            type_counts[fact.fact_type] += 1
-        
-        for ftype, count in sorted(type_counts.items()):
-            avg_confidence = self._get_avg_confidence_for_type(report.facts, ftype)
-            print(f"   • {ftype}: {count} facts (avg confidence: {avg_confidence:.0f}%)")
-        
-        print("\n🔐 HIGH CONFIDENCE FACTS (>85%):")
-        high_conf = [f for f in report.facts if f.confidence_score >= 85]
-        for fact in high_conf[:10]:  # Show first 10
-            print(f"   • [{fact.fact_type}] {fact.value}")
-            print(f"     Sources: {', '.join(fact.sources)}")
-        
-        if len(high_conf) > 10:
-            print(f"   ... and {len(high_conf) - 10} more high-confidence facts")
-        
-        print("\n⚠️ LOW CONFIDENCE FACTS (<50%):")
-        low_conf = [f for f in report.facts if f.confidence_score < 50]
-        for fact in low_conf[:5]:
-            print(f"   • [{fact.fact_type}] {fact.value} ({fact.confidence_score:.0f}%)")
-        
-        if len(low_conf) > 5:
-            print(f"   ... and {len(low_conf) - 5} more low-confidence facts")
-        
-        print("\n" + "="*60)
-    
-    def _get_avg_confidence_for_type(self, facts: List[Fact], fact_type: str) -> float:
-        """Get average confidence for a specific fact type."""
-        type_facts = [f for f in facts if f.fact_type == fact_type]
-        if not type_facts:
-            return 0.0
-        return sum(f.confidence_score for f in type_facts) / len(type_facts)
-
-
-def load_harvest_results(filepath: str) -> Dict[str, List[Dict]]:
-    """Load harvested results from a JSON file."""
-    with open(filepath, 'r', encoding='utf-8') as f:
-        return json.load(f)
-
-
-def main():
-    """Main entry point for the analyst stage CLI."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(
-        description="OSINT Intelligence Analyst Stage - Process harvested data"
-    )
-    parser.add_argument('--input', '-i', type=str, 
-                       help='Path to harvested results JSON file')
-    parser.add_argument('--privacy-mode', '-p', type=str, default='local',
-                       choices=['public', 'local', 'hybrid'],
-                       help='Privacy mode for LLM analysis (default: local)')
-    parser.add_argument('--output-dir', '-o', type=str, 
-                       default=None, help='Output directory for reports')
-    
-    args = parser.parse_args()
-    
-    # Initialize analyst with privacy mode
-    analyst = OSINTAnalystStage(privacy_mode=args.privacy_mode)
-    
-    if args.output_dir:
-        analyst.output_dir = args.output_dir
-    
-    # Load input data (auto-detect latest if no file specified)
-    if args.input:
-        raw_data = load_harvest_results(args.input)
-    else:
-        harvest_dir = os.path.join(os.getcwd(), 'harvest_output')
-        if not os.path.exists(harvest_dir):
-            print("❌ Error: 'harvest_output' directory not found. Please specify input with -i.")
-            return
-            
-        files = sorted([f for f in os.listdir(harvest_dir) 
-                       if f.startswith('harvest_result_') and f.endswith('.json')])
-        
-        if not files:
-            print("❌ No harvested results found in 'harvest_output'. Run HARVEST stage first.")
-            return
-        
-        raw_data = load_harvest_results(os.path.join(harvest_dir, files[-1]))
-    
-    # Process through analyst pipeline
-    report = analyst.process_harvest_results(raw_data)
-    
-    # Save and display results
-    filepath = analyst.save_report(report)
-    analyst.display_summary(report)
-
-
-if __name__ == '__main__':
-    main()
-
-def analyze_osint_data(harvest_output, privacy_mode: str = 'local'):
-    """
-    Convenience function to execute the ANALYST stage.
-    """
-    # Everything inside this function MUST be indented 4 spaces
-    analyst = OSINTAnalystStage(privacy_mode=privacy_mode)
-    
-    raw_data = {
-        "_target": getattr(harvest_output, 'target_name', 'unknown'),
-        "serper": [r.__dict__ for r in harvest_output.search_results],
-        "leak_lookup": [r.__dict__ for r in harvest_output.leak_lookup_results]
+                    for cr in fact.cross_references
+                ]
+            }
+            for fact in verified_facts
+        ],
+        "cross_references": [
+            {
+                "target_email": cr.target_email,
+                "search_source": cr.search_source,
+                "leaked_databases": cr.leaked_databases,
+                "confidence_boost": cr.confidence_boost
+            }
+            for cr in all_cross_references
+        ],
+        "high_confidence_count": len(high_confidence),
+        "total_processed": len(verified_facts)
     }
+
+
+def filter_high_confidence(results: List[dict], min_score: float = 0.7) -> List[dict]:
+    """Filter results to only include high-confidence matches"""
     
-    return analyst.process_harvest_results(raw_data)
+    return [result for result in results 
+           if isinstance(result, dict) and result.get("confidence_score", 0.0) >= min_score]
+
+
+# Global instance for type-safe extraction (used by various methods)
+fact_extractor = FactExtractor()
+
+
+# Example usage and testing
+async def run_demo():
+    """Demonstrate analyst capabilities"""
+    
+    # Simulate search results from HARVESTING stage (Serper.dev 'organic' list format)
+    sample_search_results = [
+        {
+            "title": "John Doe - LinkedIn Profile",
+            "link": "https://linkedin.com/in/johndoe123",
+            "snippet": "Software engineer at TechCorp, based in San Francisco"
+        },
+        {
+            "title": "test@example.com - Breach Database Entry",
+            "link": "https://breachdb.example.com/entry/12345",
+            "snippet": "Email found in 2023 data breach collection"
+        }
+    ]
+    
+    # Simulate Leak-Lookup findings
+    sample_leak_findings = [
+        {
+            "target": "test@example.com",
+            "breached_databases": ["Collection1", "DataBreach2023"],
+            "timestamp": datetime.now().isoformat()
+        }
+    ]
+    
+    # Run verification with cross-referencing
+    result = verify_search_results(
+        search_results=sample_search_results,
+        leak_lookup_findings=sample_leak_findings,
+        min_confidence_threshold=0.5
+    )
+    
+    print(f"Processed {result['total_processed']} facts")
+    print(f"High Confidence: {result['high_confidence_count']}")
+    print(f"Cross-References Found: {len(result['cross_references'])}")
+    
+    for verified in result['verified_results']:
+        boost_info = ""
+        if verified.get('cross_references'):
+            databases = verified['cross_references'][0].get('leaked_databases', [])
+            boost = verified['cross_references'][0].get('confidence_boost', 0)
+            boost_info = f" (+{boost} from {len(databases)} breach databases)"
+        
+        print(f"\nFact: {verified['text'][:50]}...")
+        print(f"Source: {verified['source']}")
+        print(f"Confidence Score: {verified['confidence_score']}{boost_info}")
+
+def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
+    """
+    Bridge function for main.py to execute the ANALYST stage.
+    """
+    # 1. Extract the raw results from the harvest tickets
+    raw_data = []
+    for result in harvest_output.search_results:
+        # Check if the result has the raw data we need
+        data = getattr(result, 'results_raw', None)
+        if data:
+            raw_data.append(data)
+
+    # 2. Run the forensic verification logic
+    # This calls the function the agent just built for you
+    report_dict = verify_search_results(
+        search_results=raw_data,
+        leak_lookup_findings=[r.__dict__ for r in harvest_output.leak_lookup_results],
+        min_confidence_threshold=0.4
+    )
+    
+    # 3. Return it in the wrapper class main.py is looking for
+    return AnalysisReport(report_dict)
 
 class AnalysisReport:
-    """Wrapper class if main.py expects this specific object type"""
-    def __init__(self, report):
-        self.report = report
+    """Wrapper class that main.py and Scribe expect to see"""
+    def __init__(self, report_dict):
+        self.report = report_dict
+        # Maps the keys so the Scribe stage can find the data
+        self.facts = report_dict.get('verified_results', [])
+        self.target_name = report_dict.get('target', 'Unknown Target')
+
+if __name__ == "__main__":
+    import asyncio
+    
+    # Run demo if executed directly
+    asyncio.run(run_demo())

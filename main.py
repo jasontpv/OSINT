@@ -27,7 +27,8 @@ from osint_recon_stage import generate_osint_queries, ReconOutput
 from osint_harvesting_stage import execute_osint_harvest, HarvestOutput
 from osint_analyst_stage import analyze_osint_data, AnalysisReport
 from osint_scribe_stage import generate_osint_report, ReportFormat, ask_user_report_format
-from osint_kanban_manager import OsintKanbanManager, PipelineConfig
+from osint_kanban_manager import OSINTKanbanManager, PipelineConfig
+
 
 
 @click.command()
@@ -72,7 +73,7 @@ def main(target: str, target_type: str, format: str, output_dir: str,
     
     # Build configuration with target type
     config = PipelineConfig(
-        target_name=target,
+        query=target,
         target_type=target_type,  # New parameter for search criteria
         wip_limits={
             "RECON": wip_recon,

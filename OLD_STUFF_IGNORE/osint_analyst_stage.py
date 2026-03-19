@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Dict, Optional, Union, Set
 from datetime import datetime
 import re
+import difflib
 
 logger = logging.getLogger("osint_analyst")
 
@@ -68,6 +69,29 @@ class FactExtractor:
     ]
     """
     
+        
+    def fuzzy_match_usernames(self, facts: List[Any], threshold: float = 0.8):
+        """Phase 3: Identifies similar usernames using fuzzy matching"""
+        # Filter for items that look like usernames (no @ symbol)
+        usernames = [f for f in facts if hasattr(f, 'text') and "@" not in f.text]
+        for i, f1 in enumerate(usernames):
+            for f2 in usernames[i+1:]:
+                similarity = difflib.SequenceMatcher(None, f1.text, f2.text).ratio()
+                if similarity >= threshold:
+                    f1.text += f" (Likely alias: {f2.text})"
+
+    def apply_confidence_decay(self, fact: Any):
+        """Phase 3: Reduces confidence for older data (5% per year)"""
+        current_year = datetime.now().year
+        if not hasattr(fact, 'text'): return
+        year_match = re.search(r'\b(20\d{2})\b', fact.text)
+        data_year = int(year_match.group(1)) if year_match else current_year
+        
+        years_old = max(0, current_year - data_year)
+        if years_old > 0:
+            penalty = (years_old * 0.05)
+            fact.confidence_score = max(0.1, getattr(fact, 'confidence_score', 0.5) - penalty)
+
     @staticmethod
     def _extract_field(data: Any, field_name: str, default: Any = None) -> Optional[Any]:
         """
@@ -479,9 +503,17 @@ def verify_search_results(search_results: List[dict],
         verified_facts.append(verified_fact)
         all_cross_references.extend(matching_matches)
     
+
+
+    # --- PHASE 3: FORENSIC TRIGGER ---
+    fact_extractor.fuzzy_match_usernames(verified_facts)
+    for fact in verified_facts:
+        fact_extractor.apply_confidence_decay(fact)
+    # ---------------------------------
+
     # Filter results by confidence threshold for output
     high_confidence = [f for f in verified_facts if f.confidence_score >= min_confidence_threshold]
-    
+   
     return {
         "verified_results": [
             {
@@ -575,6 +607,36 @@ async def run_demo():
         print(f"Source: {verified['source']}")
         print(f"Confidence Score: {verified['confidence_score']}{boost_info}")
 
+def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
+    """
+    Bridge function for main.py to execute the ANALYST stage.
+    """
+    # 1. Extract the raw results from the harvest tickets
+    raw_data = []
+    for result in harvest_output.search_results:
+        # Check if the result has the raw data we need
+        data = getattr(result, 'results_raw', None)
+        if data:
+            raw_data.append(data)
+
+    # 2. Run the forensic verification logic
+    # This calls the function the agent just built for you
+    report_dict = verify_search_results(
+        search_results=raw_data,
+        leak_lookup_findings=[r.__dict__ for r in harvest_output.leak_lookup_results],
+        min_confidence_threshold=0.4
+    )
+    
+    # 3. Return it in the wrapper class main.py is looking for
+    return AnalysisReport(report_dict)
+
+class AnalysisReport:
+    """Wrapper class that main.py and Scribe expect to see"""
+    def __init__(self, report_dict):
+        self.report = report_dict
+        # Maps the keys so the Scribe stage can find the data
+        self.facts = report_dict.get('verified_results', [])
+        self.target_name = report_dict.get('target', 'Unknown Target')
 
 if __name__ == "__main__":
     import asyncio
