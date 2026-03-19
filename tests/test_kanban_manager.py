@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 from osint_kanban_manager import (
-    OsintKanbanManager, 
+    OSINTKanbanManager, 
     PipelineConfig,
     OsintTicket
 )
