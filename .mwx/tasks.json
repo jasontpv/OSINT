@@ -26,22 +26,24 @@
     "id": "task-3",
     "title": "Update _process_analyst to parse ticket.harvest_results (JSON string/list) into dictionary for Analyst stage",
     "description": "",
-    "status": "in-progress",
+    "status": "completed",
     "priority": "medium",
     "tags": [],
     "createdAt": "2026-03-19T10:15:32.088Z",
-    "updatedAt": "2026-03-19T10:17:00.252Z",
-    "notes": []
+    "updatedAt": "2026-03-19T10:18:03.627Z",
+    "notes": [],
+    "completedAt": "2026-03-19T10:18:03.627Z"
   },
   {
     "id": "task-4",
     "title": "Fix execute_pipeline loop to wait until all columns are empty before completing",
     "description": "",
-    "status": "not-started",
+    "status": "completed",
     "priority": "medium",
     "tags": [],
     "createdAt": "2026-03-19T10:15:33.120Z",
-    "updatedAt": "2026-03-19T10:15:33.120Z",
-    "notes": []
+    "updatedAt": "2026-03-19T10:18:04.787Z",
+    "notes": [],
+    "completedAt": "2026-03-19T10:18:04.787Z"
   }
 ]

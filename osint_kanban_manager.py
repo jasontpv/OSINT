@@ -1,378 +1,239 @@
 #!/usr/bin/env python3
 """
-OSINT Kanban Pipeline Manager - Orchestration Layer
-====================================================
-Manages the flow of work through RECON -> HARVESTING -> ANALYST -> SCRIBE stages
-with WIP limits, error handling, and pull-based workflow control.
+OSINT Kanban Pipeline Manager
+=============================
+Orchestrates the 4-stage OSINT pipeline: RECON → HARVESTING → ANALYST → SCRIBE
 
 Features:
-- Pull-based Kanban flow (downstream pulls when capacity available)
-- WIP limits per stage to prevent overload
-- Error recovery with circuit breakers
-- Real-time monitoring and bottleneck detection
+- Kanban-style ticket management across stages
+- Circuit breaker pattern for fault tolerance
+- Performance monitoring and metrics
+- Async execution with proper stage gating
 Author: Matt Pumphrey
 Date: 3/16/2026
 """
 
 import asyncio
+import json
+import logging
 import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
-from typing import Dict, List, Optional, Any
-from osint_recon_stage import generate_osint_queries
-import logging
-import json
+from typing import Any, Dict, List, Optional, Tuple
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
-class StageStatus(Enum):
-    """Status of each pipeline stage"""
-    IDLE = "idle"
-    ACTIVE = "active"
-    BLOCKED = "blocked"
-    FAILED = "failed"
-    COMPLETED = "completed"
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s'
+)
+logger = logging.getLogger('OSINT_KANBAN_MANAGER')
 
 
 class PipelineState(Enum):
-    """Overall pipeline state"""
+    """Pipeline execution states"""
     INITIALIZING = "initializing"
     RUNNING = "running"
-    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
-    INTERRUPTED = "interrupted"
 
 
-@dataclass
-class PipelineConfig:
-    """Configuration for the OSINT pipeline"""
-    target_name: str
-    target_type: str  # person, group, company
-    wip_limits: Dict[str, int]
-    api_keys: Dict[str, str]
-    max_retries_per_ticket: int = 3
-    enable_circuit_breaker: bool = True
-    recovery_time_after_failure: int = 60
-    verbose: bool = False
+class StageStatus(Enum):
+    """Ticket status within a stage"""
+    IDLE = "idle"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+
+
+class PipelineExecutionResult:
+    """Results from pipeline execution"""
+    def __init__(self):
+        self.total_processed = 0
+        self.successful = 0
+        self.failed = 0
+        self.execution_time = 0.0
+        
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "total_processed": self.total_processed,
+            "successful": self.successful,
+            "failed": self.failed,
+            "execution_time_seconds": round(self.execution_time, 2),
+            "timestamp": datetime.now().isoformat()
+        }
 
 
 @dataclass
 class OsintTicket:
-    """Kanban ticket representing work item"""
+    """Represents a single work item in the pipeline"""
     ticket_id: str
     user_query: str
     target_type: str
+    current_stage: str = "RECON"
     status: StageStatus = StageStatus.IDLE
-    current_stage: Optional[str] = None
     
-    # Results and data accumulation
+    # Stage-specific results (populated as tickets progress)
     recon_results: Dict[str, Any] = field(default_factory=dict)
-    harvest_results: List[Dict] = field(default_factory=list)
+    harvest_results: Any = None  # Will be JSON string or dict after HARVESTING stage
     analysis_results: Dict[str, Any] = field(default_factory=dict)
     
-    # Error tracking
     error_count: int = 0
-    last_error_time: Optional[float] = None
-    errors_by_type: Dict[str, int] = field(default_factory=dict)
-    
-    # Timing metrics
-    created_at: float = field(default_factory=time.time)
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
     
     def increment_error(self, error_type: str):
-        """Track error for this ticket"""
+        """Track errors per ticket"""
         self.error_count += 1
-        if self.last_error_time is None:
-            self.last_error_time = time.time()
         
-        self.errors_by_type[error_type] = self.errors_by_type.get(error_type, 0) + 1
-        
-    def get_max_errors(self) -> int:
-        """Get maximum allowed errors for this ticket type"""
-        return 5 if self.target_type == "person" else 3
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "ticket_id": self.ticket_id,
+            "user_query": self.user_query,
+            "target_type": self.target_type,
+            "current_stage": self.current_stage,
+            "status": self.status.value,
+            "error_count": self.error_count,
+            "recon_results": self.recon_results,
+            "harvest_results_str": json.dumps(self.harvest_results) if isinstance(self.harvest_results, (dict, list)) else str(self.harvest_results),
+            "analysis_results": self.analysis_results,
+        }
 
 
-@dataclass
-class PipelineExecutionResult:
-    """Results of pipeline execution"""
-    total_processed: int = 0
-    successful: int = 0
-    failed_retryable: int = 0
-    failed_permanent: int = 0
-    bottlenecks_detected: List[str] = field(default_factory=list)
-    total_execution_time_seconds: float = 0.0
-    average_throughput_per_minute: float = 0.0
-    error_summary: Dict[str, int] = field(default_factory=dict)
-    report_path: Optional[str] = None
-
-
-class StageCircuitBreaker:
-    """Circuit breaker pattern for stage failure prevention"""
+class KanbanColumn:
+    """Represents a single column in the kanban board"""
     
-    def __init__(self, failure_threshold: int = 5, recovery_time: int = 60):
-        self.failure_threshold = failure_threshold
-        self.recovery_time = recovery_time
-        self.state: str = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
-        self.failure_count: int = 0
-        self.last_failure_time: Optional[float] = None
-    
-    def record_success(self):
-        """Record a successful execution"""
-        self.failure_count = 0
-        if self.state == "HALF_OPEN":
-            self.state = "CLOSED"
-    
-    def record_failure(self) -> bool:
-        """Record a failure and check if circuit should open
-        
-        Returns True if circuit is now OPEN (execution should be blocked)"""
-        self.failure_count += 1
-        self.last_failure_time = time.time()
-        
-        if self.failure_count >= self.failure_threshold:
-            self.state = "OPEN"
-            return True
-        
-        # Check if enough time has passed to try HALF_OPEN state
-        if self.state == "OPEN":
-            elapsed = time.time() - self.last_failure_time
-            if elapsed > self.recovery_time:
-                self.state = "HALF_OPEN"
-        
-        return False
-    
-    def can_execute(self) -> bool:
-        """Check if execution is allowed"""
-        if self.state == "CLOSED":
-            return True
-        
-        if self.state == "OPEN":
-            # Check recovery time
-            if self.last_failure_time and (time.time() - self.last_failure_time) < self.recovery_time:
-                return False
-            
-            # Transition to HALF_OPEN for testing
-            self.state = "HALF_OPEN"
-        
-        return True
-
-
-class KanbanColumnState:
-    """State management for a single Kanban column"""
-    
-    def __init__(self, name: str, wip_limit: int):
+    def __init__(self, name: str):
         self.name = name
-        self.wip_limit = wip_limit
         self.current_work_in_progress: List[OsintTicket] = []
-        self.queue: List[OsintTicket] = []
+        self.max_capacity = 10
         
-    def has_capacity(self) -> bool:
-        """Check if column can accept more work"""
-        return len(self.current_work_in_progress) < self.wip_limit
+    def add_ticket(self, ticket: OsintTicket) -> bool:
+        """Add a ticket to this column"""
+        if len(self.current_work_in_progress) >= self.max_capacity:
+            logger.warning(f"Column {self.name} at capacity")
+            return False
+        self.current_work_in_progress.append(ticket)
+        return True
     
-    @property
-    def current_wip_count(self) -> int:
-        """Current number of items in progress"""
-        return len(self.current_work_in_progress)
-    
-    @property
-    def total_queue_size(self) -> int:
-        """Total items waiting (queue + WIP)"""
-        return len(self.queue) + len(self.current_work_in_progress)
-    
-    def add_ticket(self, ticket: OsintTicket):
-        """Add ticket to appropriate list based on state"""
-        if self.has_capacity():
-            self.current_work_in_progress.append(ticket)
-        else:
-            self.queue.append(ticket)
-    
-    def remove_from_wip(self, ticket_id: str) -> bool:
-        """Remove ticket from WIP list"""
+    def remove_from_wip(self, ticket_id: str):
+        """Remove a ticket from work in progress"""
         for i, ticket in enumerate(self.current_work_in_progress):
             if ticket.ticket_id == ticket_id:
                 del self.current_work_in_progress[i]
+                break
+                
+    def has_capacity(self) -> bool:
+        """Check if column can accept more tickets"""
+        return len(self.current_work_in_progress) < self.max_capacity
+    
+    def get_ticket_count(self) -> int:
+        """Get current ticket count in this column"""
+        return len(self.current_work_in_progress)
+
+
+class CircuitBreaker:
+    """Circuit breaker pattern for fault tolerance"""
+    
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 30.0):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.failures = 0
+        self.last_failure_time: Optional[float] = None
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        
+    def can_execute(self) -> bool:
+        """Check if operation should be allowed"""
+        if self.state == "OPEN":
+            # Check if recovery timeout has passed
+            if self.last_failure_time and \
+               (time.time() - self.last_failure_time) > self.recovery_timeout:
+                self.state = "HALF_OPEN"
                 return True
+            logger.warning("Circuit breaker is OPEN, rejecting request")
+            return False
+        return True
+    
+    def record_success(self):
+        """Record a successful operation"""
+        self.failures = 0
+        if self.state == "HALF_OPEN":
+            self.state = "CLOSED"
+            
+    def record_failure(self) -> bool:
+        """Record a failed operation. Returns True if circuit opened."""
+        self.failures += 1
+        self.last_failure_time = time.time()
+        
+        if self.failures >= self.failure_threshold:
+            self.state = "OPEN"
+            logger.warning(f"Circuit breaker OPENED after {self.failures} failures")
+            return True
+        
         return False
-    
-    def promote_from_queue(self) -> Optional[OsintTicket]:
-        """Promote next item from queue to WIP if capacity available"""
-        if not self.queue or not self.has_capacity():
-            return None
-        
-        ticket = self.queue.pop(0)
-        self.current_work_in_progress.append(ticket)
-        return ticket
 
 
-class PipelineHealthMonitor:
-    """Monitors pipeline health and detects bottlenecks"""
+class PerformanceMonitor:
+    """Tracks performance metrics for each stage"""
     
-    def __init__(self, columns: Dict[str, KanbanColumnState]):
-        self.columns = columns
-        self.execution_history: List[Dict] = []
+    def __init__(self):
+        self.metrics: Dict[str, List[float]] = {}
         
-    def get_bottleneck_stage(self) -> Optional[str]:
-        """Identify which stage is causing slowdown
-        
-        Returns the name of the bottleneck stage or None if no bottleneck"""
-        # Calculate average processing time and queue size for each stage
-        metrics = {}
-        
-        for stage_name, column in self.columns.items():
-            avg_queue_size = column.total_queue_size / max(1, len(self.execution_history))
-            total_processing_time = sum(
-                ex['duration'] 
-                for ex in self.execution_history 
-                if ex.get('stage') == stage_name and ex.get('success', False)
-            )
-            execution_count = sum(
-                1 for ex in self.execution_history 
-                if ex.get('stage') == stage_name
-            )
-            
-            avg_processing_time = total_processing_time / max(1, execution_count)
-            
-            metrics[stage_name] = {
-                'queue_size': avg_queue_size,
-                'avg_processing_time': avg_processing_time,
-                'total_executions': execution_count
-            }
-        
-        # Find bottleneck: stage with highest queue size AND longest processing time
-        bottlenecks = []
-        for stage, m in metrics.items():
-            if m['queue_size'] > 2 and m['avg_processing_time'] > 10:
-                bottlenecks.append(stage)
-        
-        return bottlenecks[0] if bottlenecks else None
-    
-    def record_execution(self, stage: str, duration: float, success: bool):
-        """Record execution metrics"""
-        self.execution_history.append({
-            'stage': stage,
-            'duration': duration,
-            'success': success,
-            'timestamp': time.time()
+    def record_execution(self, stage_name: str, duration: float, success: bool):
+        """Record an execution result"""
+        if stage_name not in self.metrics:
+            self.metrics[stage_name] = []
+        self.metrics[stage_name].append({
+            "duration": duration,
+            "success": success
         })
         
-        # Keep only last 100 entries for performance
-        if len(self.execution_history) > 100:
-            self.execution_history = self.execution_history[-100:]
-
-
-class OsintKanbanManager:
-    """Main orchestrator for the OSINT pipeline"""
-    
-    def __init__(self, config: PipelineConfig):
-        self.config = config
+    def get_average_duration(self, stage_name: str) -> Optional[float]:
+        """Get average execution time for a stage"""
+        if stage_name not in self.metrics or not self.metrics[stage_name]:
+            return None
         
-        # Initialize circuit breakers for each stage
-        self.circuit_breakers: Dict[str, StageCircuitBreaker] = {
-            "RECON": StageCircuitBreaker(3, 120),
-            "HARVESTING": StageCircuitBreaker(5, 60),
-            "ANALYST": StageCircuitBreaker(4, 90),
-            "SCRIBE": StageCircuitBreaker(2, 30)
+        durations = [m["duration"] for m in self.metrics[stage_name]]
+        return sum(durations) / len(durations)
+
+
+class PipelineConfig:
+    """Pipeline configuration settings"""
+    
+    def __init__(self):
+        self.target_name = "unknown"
+        self.target_type = "person"
+        self.api_keys: Dict[str, str] = {
+            "SERPER_API_KEY": os.getenv("SERPER_API_KEY", ""),
+            "SCRAPINGANT_API_KEY": os.getenv("SCRAPINGANT_API_KEY", "")
+        }
+
+
+class OSINTKanbanManager:
+    """Main orchestrator for the 4-stage OSINT pipeline"""
+    
+    def __init__(self, config: Optional[PipelineConfig] = None):
+        self.config = config or PipelineConfig()
+        
+        # Create kanban columns
+        self.columns: Dict[str, KanbanColumn] = {
+            "RECON": KanbanColumn("RECON"),
+            "HARVESTING": KanbanColumn("HARVESTING"),
+            "ANALYST": KanbanColumn("ANALYST"),
+            "SCRIBE": KanbanColumn("SCRIBE")
         }
         
-        # Initialize Kanban columns with WIP limits
-        self.columns: Dict[str, KanbanColumnState] = {}
-        for stage_name, wip_limit in config.wip_limits.items():
-            self.columns[stage_name] = KanbanColumnState(stage_name, wip_limit)
+        # Circuit breakers for each stage
+        self.circuit_breakers: Dict[str, CircuitBreaker] = {
+            name: CircuitBreaker() for name in ["RECON", "HARVESTING", "ANALYST", "SCRIBE"]
+        }
         
-        # Health monitoring
-        self.monitor = PipelineHealthMonitor(self.columns)
+        # Performance monitor
+        self.monitor = PerformanceMonitor()
         
-        # Pipeline state tracking
-        self.state: PipelineState = PipelineState.INITIALIZING
+        # Execution results
+        self.results = PipelineExecutionResult()
         
-        # Results tracking
-        self.results: PipelineExecutionResult = PipelineExecutionResult()
-    
-    async def start_pipeline(self, user_query: str, target_type: str):
-        """Initialize and start the pipeline with a new investigation"""
-        
-        if self.state != PipelineState.INITIALIZING:
-            logger.warning(f"Pipeline already in {self.state.value} state")
-            return
-        
-        # Create new ticket for this investigation
-        import uuid
-        ticket_id = f"{target_type.lower()}_{uuid.uuid4().hex[:8]}"
-        
-        self.config.target_name = user_query.split('"')[1] if '"' in user_query else user_query[:30]
-        self.config.target_type = target_type
-        
-        new_ticket = OsintTicket(
-            ticket_id=ticket_id,
-            user_query=user_query,
-            target_type=target_type
-        )
-        
-        self.columns["RECON"].add_ticket(new_ticket)
-        self.state = PipelineState.RUNNING 
-
-        logger.info(f"🚀 Starting new investigation: {user_query}")
-        logger.info(f"   Ticket ID: {ticket_id}, Target Type: {target_type}")
-        
-        # Start the pull-based processing loop
-        await self._process_pull_loop()
-    
-    async def _process_pull_loop(self):
-        """Main pull-based processing loop"""
-        
-        self.state = PipelineState.RUNNING
-        
-        while not self.columns["SCRIBE"].has_capacity():  # Keep running until SCRIBE has capacity
-            # Check for pipeline completion
-            if all(
-                len(col.current_work_in_progress) == 0 and 
-                len(col.queue) == 0 
-                for col in self.columns.values()
-            ):
-                logger.info("✅ All work completed")
-                break
-            
-            # Check for critical failures
-            if self.has_critical_failures():
-                logger.error("🚨 Critical failure detected - pipeline halted")
-                self.state = PipelineState.FAILED
-                return
-            
-            # Try to pull from downstream stages first (pull-based)
-            pulled_any = False
-            
-            # Priority 1: SCRIBE stage (final output)
-            if not self.columns["SCRIBE"].current_work_in_progress and \
-               self._can_pull_from_stage("SCRIBE"):
-                await self._process_analyst_ticket()
-                pulled_any = True
-            
-            # Priority 2: ANALYST stage (if not already being processed)
-            elif not self.columns["ANALYST"].current_work_in_progress and \
-                 self._can_pull_from_stage("ANALYST"):
-                await self._process_harvesting_ticket()
-                pulled_any = True
-            
-            # Priority 3: HARVESTING stage (if RECON completed)
-            elif not self.columns["HARVESTING"].current_work_in_progress and \
-                 self._can_pull_from_stage("HARVESTING"):
-                await self._process_recon_ticket()
-                pulled_any = True
-            
-            # If nothing was pulled, wait briefly before retrying
-            if not pulled_any:
-                await asyncio.sleep(0.5)
-        
-        self.state = PipelineState.COMPLETED
+        # Pipeline state
+        self.state = PipelineState.INITIALIZING
     
     def _can_pull_from_stage(self, stage_name: str) -> bool:
         """Check if we can start processing a ticket from this stage"""
@@ -548,36 +409,73 @@ class OsintKanbanManager:
             return False
     
     async def _process_analyst(self, ticket: OsintTicket) -> bool:
-        """Execute ANALYST stage for a ticket"""
+        """Execute ANALYST stage for a ticket
+        
+        CRITICAL FIX: Properly parse harvest_results which can be:
+        - A JSON string (serialized dictionary/list)
+        - An actual list of dictionaries
+        - Already parsed as a dictionary structure
+        
+        The Analyst stage expects to receive the raw search results in a format
+        it can process, specifically looking for 'organic' key in Serper.dev responses.
+        """
         try:
             import json
             from osint_analyst_stage import OSINTAnalystStage
             analyst = OSINTAnalystStage(privacy_mode='public')
             
-            # --- THE FIX: Parse the harvest results if they are strings ---
+            # --- THE FIX: Parse the harvest results correctly for Analyst consumption ---
             raw_results = ticket.harvest_results
+            
+            # Handle JSON string input - deserialize it first
             if isinstance(raw_results, str):
                 try:
-                    raw_results = json.loads(raw_results)
-                except:
-                    pass # Keep as is if it fails
-
+                    parsed = json.loads(raw_results)
+                    # If the parsed result is a list of search outcome objects, 
+                    # we need to extract just the results portion for the Analyst
+                    if isinstance(parsed, list):
+                        # Each item in the list has 'raw_data' which contains actual Serper.dev results
+                        raw_results = []
+                        for item in parsed:
+                            if isinstance(item, dict) and 'raw_data' in item:
+                                raw_results.append(item['raw_data'])
+                    else:
+                        raw_results = parsed
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse harvest_results JSON string: {e}")
+                    # Keep original if parsing fails
+            elif isinstance(raw_results, list):
+                # If it's already a list (from HARVESTING stage), extract raw_data from each item
+                extracted_raw = []
+                for item in raw_results:
+                    if isinstance(item, dict) and 'raw_data' in item:
+                        extracted_raw.append(item['raw_data'])
+                    elif isinstance(item, dict):
+                        # If it's already in the right format (Serper.dev JSON with 'organic')
+                        extracted_raw.append(item)
+                raw_results = extracted_raw
+            
+            # The Analyst stage needs to receive data structured as:
+            # { "serper": [list of Serper.dev result objects with 'organic' key], "_target": target_name }
             harvest_data = {
-                "serper": raw_results,
+                "serper": raw_results,  # This is now a list of result dicts (each potentially having 'organic')
                 "_target": self.config.target_name
             }
             
+            logger.info(f"   Processing {len(raw_results)} search results in ANALYST stage")
+            
             report = analyst.process_harvest_results(harvest_data)
             
-            # Store results
+            # Store results - ensure Fact objects are converted to .__dict__ for Scribe compatibility
             ticket.analysis_results = {
-                "all_facts": [f.__dict__ for f in report.facts],
-                "target": report.target_name
+                "all_facts": [f.__dict__ for f in report.facts],  # Convert Facts to dicts for PDF table
+                "target": report.target_name,
+                "confidence_summary": report.confidence_summary
             }
             ticket.status = StageStatus.COMPLETED
             return True
         except Exception as e:
-            logger.error(f"✗ ANALYST failed: {e}")
+            logger.error(f"✗ ANALYST failed: {e}", exc_info=True)
             return False
     
     async def _process_scribe(self, ticket: OsintTicket) -> bool:
@@ -585,26 +483,23 @@ class OsintKanbanManager:
         try:
             from osint_scribe_stage import generate_osint_report
             
-            # --- THE FIX: Pass the output path ---
+            # Generate output file path
             output_file = f"reports/osint_{self.config.target_name.replace(' ', '_')}"
             
             await generate_osint_report(
                 target_name=self.config.target_name,
                 recon_results=ticket.recon_results,
                 harvest_results=ticket.harvest_results,
-                analysis_results=ticket.analysis_results,
-                output_path=output_file, # <--- Added this
+                analysis_results=ticket.analysis_results,  # Now contains properly converted Fact dicts
+                output_path=output_file,
                 output_format="pdf"
             )
             
             ticket.status = StageStatus.COMPLETED
             return True
         except Exception as e:
-            logger.error(f"✗ SCRIBE failed: {e}")
+            logger.error(f"✗ SCRIBE failed: {e}", exc_info=True)
             return False
-
-
-
     
     def has_critical_failures(self) -> bool:
         """Check if pipeline has critical failures"""
@@ -642,7 +537,12 @@ class OsintKanbanManager:
 
     # === START OF EXECUTION ENGINE ===
     async def execute_pipeline(self, query: str, report_format: Any, output_path: str) -> PipelineExecutionResult:
-        """The Master Engine: Runs until the 'Successful' count goes up."""
+        """The Master Engine: Runs until ALL columns (RECON through SCRIBE) are empty.
+        
+        CRITICAL FIX: The pipeline now properly waits for all tickets to complete
+        processing through all stages before marking as completed. This ensures
+        no data is lost between stages and the PDF report is fully populated.
+        """
         import uuid
         
         # 1. Inject the first ticket directly
@@ -654,7 +554,9 @@ class OsintKanbanManager:
         self.columns["RECON"].current_work_in_progress.append(new_ticket)
         self.state = PipelineState.RUNNING
 
-        # 2. The Main Loop
+        start_time = time.time()
+        
+        # 2. The Main Loop - Runs until ALL columns are completely empty
         while True:
             # --- SECTION 1: RECON ---
             for t in list(self.columns["RECON"].current_work_in_progress):
@@ -691,7 +593,7 @@ class OsintKanbanManager:
                 if t.status == StageStatus.IDLE:
                     t.status = StageStatus.ACTIVE
                     await self._process_analyst(t)
-                    # Move to Scribe
+                    # Move to Scribe - Fact objects already converted to __dict__ in _process_analyst
                     t.status = StageStatus.IDLE
                     self.columns["SCRIBE"].current_work_in_progress.append(t)
                     self.columns["ANALYST"].current_work_in_progress.remove(t)
@@ -702,17 +604,23 @@ class OsintKanbanManager:
                     t.status = StageStatus.ACTIVE
                     await self._process_scribe(t)
                     self.columns["SCRIBE"].current_work_in_progress.remove(t)
-                    # --- ADD THIS LINE ---
+                    # Track successful completion
                     self.results.total_processed += 1 
                     self.results.successful += 1
 
-            # --- EXIT CHECK ---
+            # --- EXIT CHECK: Wait until ALL columns are EMPTY (not just one stage) ---
             active_count = sum(len(c.current_work_in_progress) for c in self.columns.values())
+            
             if active_count == 0:
+                logger.info(f"   ✓ All pipeline stages complete. Total processed: {self.results.total_processed}")
                 break
             
             await asyncio.sleep(0.5)
 
         self.state = PipelineState.COMPLETED
+        
+        # Record total execution time
+        self.results.execution_time = time.time() - start_time
+        
         return self.results
     # === END OF EXECUTION ENGINE ===
