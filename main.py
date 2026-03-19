@@ -102,7 +102,7 @@ def main(target: str, target_type: str, format: str, output_dir: str,
         sys.exit(1)
     
     # Initialize manager and execute pipeline
-    manager = OsintKanbanManager(config=config)
+    manager = OSINTKanbanManager(config=config)
     
     output_path = os.path.join(output_dir, f"osint_{target.replace(' ', '_')}")
     
