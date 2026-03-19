@@ -14,22 +14,23 @@
     "id": "task-2",
     "title": "Fix extract_facts_from_source to handle Serper.dev JSON structure with ['organic'] list",
     "description": "",
-    "status": "in-progress",
+    "status": "completed",
     "priority": "medium",
     "tags": [],
     "createdAt": "2026-03-19T10:15:30.930Z",
-    "updatedAt": "2026-03-19T10:15:34.772Z",
-    "notes": []
+    "updatedAt": "2026-03-19T10:16:59.027Z",
+    "notes": [],
+    "completedAt": "2026-03-19T10:16:59.027Z"
   },
   {
     "id": "task-3",
     "title": "Update _process_analyst to parse ticket.harvest_results (JSON string/list) into dictionary for Analyst stage",
     "description": "",
-    "status": "not-started",
+    "status": "in-progress",
     "priority": "medium",
     "tags": [],
     "createdAt": "2026-03-19T10:15:32.088Z",
-    "updatedAt": "2026-03-19T10:15:32.088Z",
+    "updatedAt": "2026-03-19T10:17:00.252Z",
     "notes": []
   },
   {

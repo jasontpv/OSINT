@@ -93,11 +93,31 @@ class CrossReferenceEngine:
         self.source_cache: Dict[str, List[Fact]] = defaultdict(list)
 
     def extract_facts_from_source(self, source_data: Any, tool_name: str) -> List[Fact]:
-        """Extract structured facts from raw tool output (Handles Lists and Dicts)"""
+        """Extract structured facts from raw tool output (Handles Lists and Serper.dev JSON structure)
+        
+        This method handles various input formats including:
+        - Direct list of result dictionaries
+        - Dictionary with 'organic' key containing search results (Serper.dev format)
+        - Nested data structures
+        
+        Args:
+            source_data: Any type of data structure (dict, list, or single item)
+            tool_name: Name of the tool that produced this data
+            
+        Returns:
+            List[Fact]: Extracted facts from the source data
+        """
         extracted = []
         
-        # Convert to list so we can loop through results
-        items_to_process = source_data if isinstance(source_data, list) else [source_data]
+        # Handle Serper.dev JSON structure - extract 'organic' list first if present
+        # This is critical for properly parsing Google Search results
+        if isinstance(source_data, dict) and 'organic' in source_data:
+            items_to_process = source_data['organic']
+        elif isinstance(source_data, list):
+            items_to_process = source_data
+        else:
+            # Convert single item to list for processing
+            items_to_process = [source_data] if not isinstance(source_data, dict) or not self._is_empty_dict(source_data) else []
 
         for item in items_to_process:
             if not isinstance(item, dict):
@@ -133,15 +153,23 @@ class CrossReferenceEngine:
             for link in links:
                 extracted.append(Fact(fact_type='source_link', value=link, sources=[tool_name], confidence_score=100.0))
 
-            # 7. Bio/Keywords
+            # 7. Bio/Keywords - handle Serper.dev 'snippet' field
             bio_text = self._extract_field(item, ['bio', 'about', 'description', 'snippet'])
             if bio_text:
                 # Joining if bio_text is a list
                 value_str = " ".join(bio_text) if isinstance(bio_text, list) else str(bio_text)
                 extracted.append(Fact(fact_type='bio_keywords', value=value_str, sources=[tool_name], confidence_score=75.0, context={"raw_bio": value_str}))
 
-        return extracted       
+        return extracted
         
+    def _is_empty_dict(self, data: Any) -> bool:
+        """Check if the data is an empty or nearly-empty dictionary"""
+        if not isinstance(data, dict):
+            return False
+        # Consider it "empty" if it has no meaningful keys for processing
+        meaningful_keys = {'organic', 'data', 'results', 'items'}
+        return all(key.lower() not in str(k).lower() for k in data.keys())
+
     def normalize_field_name(self, field_name: str) -> str:
         """Normalize various field names to standard types"""
         field_lower = field_name.lower().strip()
@@ -149,19 +177,41 @@ class CrossReferenceEngine:
             if any(variation in field_lower for variation in variations):
                 return fact_type
         return "other"
-    
 
-    
     def _extract_field(self, source_data: Any, field_patterns: List[str]) -> List[str]:
-        """Extract field values using multiple patterns"""
-        results = []
-        for pattern in field_patterns:
-            if isinstance(source_data.get(pattern), str):
-                results.append(source_data[pattern])
-            elif isinstance(source_data.get(pattern), list):
-                results.extend([str(item) for item in source_data[pattern]])
+        """Extract field values using multiple patterns
         
-        # Also search nested keys
+        This method handles both string and list values robustly.
+        
+        Args:
+            source_data: The data structure to extract from (must be dict-like for get())
+            field_patterns: List of possible field names to search for
+            
+        Returns:
+            List[str]: Extracted field values as strings
+        """
+        results = []
+        
+        # Ensure we're working with a dict for the first extraction attempt
+        if not isinstance(source_data, dict):
+            return []
+            
+        for pattern in field_patterns:
+            value = source_data.get(pattern)
+            if value is None:
+                continue
+                
+            if isinstance(value, str):
+                results.append(value)
+            elif isinstance(value, list):
+                # Convert each item to string, filtering out non-string items
+                for item in value:
+                    try:
+                        results.append(str(item))
+                    except (TypeError, ValueError):
+                        continue
+        
+        # Also search nested keys - handle various nesting levels
         if 'data' in source_data and isinstance(source_data['data'], dict):
             for pattern in field_patterns:
                 if pattern in source_data['data']:
@@ -169,7 +219,29 @@ class CrossReferenceEngine:
                     if isinstance(value, str):
                         results.append(value)
                     elif isinstance(value, list):
-                        results.extend([str(item) for item in value])
+                        for item in value:
+                            try:
+                                results.append(str(item))
+                            except (TypeError, ValueError):
+                                continue
+        
+        # Additional search in 'organic' key (for Serper.dev results that might be nested deeper)
+        if 'organic' in source_data and isinstance(source_data['organic'], list):
+            for item in source_data['organic'][:5]:  # Limit to first 5 items
+                if not isinstance(item, dict):
+                    continue
+                for pattern in field_patterns:
+                    value = item.get(pattern)
+                    if value is None:
+                        continue
+                    if isinstance(value, str):
+                        results.append(value)
+                    elif isinstance(value, list):
+                        for subitem in value:
+                            try:
+                                results.append(str(subitem))
+                            except (TypeError, ValueError):
+                                pass
         
         return [r.strip() for r in results if r and len(r.strip()) > 0]
     
@@ -644,7 +716,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()  # <--- This MUST be indented 4 spaces
+    main()
 
 def analyze_osint_data(harvest_output, privacy_mode: str = 'local'):
     """
