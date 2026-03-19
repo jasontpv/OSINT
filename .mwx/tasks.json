@@ -1,0 +1,46 @@
+[
+  {
+    "id": "task-1",
+    "title": "Fix Python code bugs in OSINT Scribe Stage",
+    "description": "Identify and fix all bugs in the OSINT Scribe Stage Python script including syntax errors, missing imports, incorrect try/except structure, and logic errors.",
+    "status": "in-progress",
+    "priority": "medium",
+    "tags": [],
+    "createdAt": "2026-03-16T03:48:01.230Z",
+    "updatedAt": "2026-03-19T04:29:32.340Z",
+    "notes": []
+  },
+  {
+    "id": "task-2",
+    "title": "Fix extract_facts_from_source to handle Serper.dev JSON structure with ['organic'] list",
+    "description": "",
+    "status": "in-progress",
+    "priority": "medium",
+    "tags": [],
+    "createdAt": "2026-03-19T10:15:30.930Z",
+    "updatedAt": "2026-03-19T10:15:34.772Z",
+    "notes": []
+  },
+  {
+    "id": "task-3",
+    "title": "Update _process_analyst to parse ticket.harvest_results (JSON string/list) into dictionary for Analyst stage",
+    "description": "",
+    "status": "not-started",
+    "priority": "medium",
+    "tags": [],
+    "createdAt": "2026-03-19T10:15:32.088Z",
+    "updatedAt": "2026-03-19T10:15:32.088Z",
+    "notes": []
+  },
+  {
+    "id": "task-4",
+    "title": "Fix execute_pipeline loop to wait until all columns are empty before completing",
+    "description": "",
+    "status": "not-started",
+    "priority": "medium",
+    "tags": [],
+    "createdAt": "2026-03-19T10:15:33.120Z",
+    "updatedAt": "2026-03-19T10:15:33.120Z",
+    "notes": []
+  }
+]
