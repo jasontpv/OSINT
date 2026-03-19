@@ -198,10 +198,30 @@ class PerformanceMonitor:
 class PipelineConfig:
     """Pipeline configuration settings"""
     
-    def __init__(self):
-        self.target_name = "unknown"
-        self.target_type = "person"
-        self.api_keys: Dict[str, str] = {
+    def __init__(self, **kwargs):
+        # Use kwargs with fallbacks to prevent TypeError from extra parameters
+        self.target_name = kwargs.get('target_name') or kwargs.get('query') or "unknown"
+        
+        # Use setattr for all incoming arguments to handle any extra parameters gracefully
+        for key, value in kwargs.items():
+            if key == 'target_name' or key == 'query':
+                continue  # Already handled above
+            
+            # Map common parameter names to internal attribute names
+            attr_name = {
+                'target_type': 'target_type',
+                'wip_limits': '_wip_limits',
+                'api_keys': 'api_keys',
+                'max_retries_per_ticket': 'max_retries_per_ticket',
+                'enable_circuit_breaker': 'enable_circuit_breaker',
+                'recovery_time_after_failure': 'recovery_time_after_failure'
+            }.get(key, key)  # Use key as attr_name if not in mapping
+            
+            setattr(self, attr_name, value)
+        
+        # Set defaults for missing attributes
+        self.target_type = getattr(self, 'target_type', "person")
+        self.api_keys: Dict[str, str] = kwargs.get('api_keys') or {
             "SERPER_API_KEY": os.getenv("SERPER_API_KEY", ""),
             "SCRAPINGANT_API_KEY": os.getenv("SCRAPINGANT_API_KEY", "")
         }
