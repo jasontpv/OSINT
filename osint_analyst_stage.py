@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OSINT Analyst Stage - Cross-Verification and Confidence Scoring
+OSINT Analyst Stage - Cross-Verification and Confidence Scoring (FIXED)
 
 This module handles:
 1. Cross-referencing search results with Leak-Lookup breach data
@@ -12,6 +12,7 @@ Key Fixes Implemented:
 - _extract_field now accepts Any type and handles dict/list safely (no AttributeError)
 - extract_facts_from_source drills down into 'organic' list to get link/title/snippet
 - Proper data normalization between HARVESTING and ANALYST stages
+- Type-safe extraction that prevents crashes on malformed JSON
 """
 
 import asyncio
@@ -69,29 +70,6 @@ class FactExtractor:
     ]
     """
     
-        
-    def fuzzy_match_usernames(self, facts: List[Any], threshold: float = 0.8):
-        """Phase 3: Identifies similar usernames using fuzzy matching"""
-        # Filter for items that look like usernames (no @ symbol)
-        usernames = [f for f in facts if hasattr(f, 'text') and "@" not in f.text]
-        for i, f1 in enumerate(usernames):
-            for f2 in usernames[i+1:]:
-                similarity = difflib.SequenceMatcher(None, f1.text, f2.text).ratio()
-                if similarity >= threshold:
-                    f1.text += f" (Likely alias: {f2.text})"
-
-    def apply_confidence_decay(self, fact: Any):
-        """Phase 3: Reduces confidence for older data (5% per year)"""
-        current_year = datetime.now().year
-        if not hasattr(fact, 'text'): return
-        year_match = re.search(r'\b(20\d{2})\b', fact.text)
-        data_year = int(year_match.group(1)) if year_match else current_year
-        
-        years_old = max(0, current_year - data_year)
-        if years_old > 0:
-            penalty = (years_old * 0.05)
-            fact.confidence_score = max(0.1, getattr(fact, 'confidence_score', 0.5) - penalty)
-
     @staticmethod
     def _extract_field(data: Any, field_name: str, default: Any = None) -> Optional[Any]:
         """
@@ -132,7 +110,6 @@ class FactExtractor:
             
             # Case 3: Data is a string - attempt to parse as JSON
             elif isinstance(data, str):
-                import json
                 try:
                     parsed = json.loads(data)
                     return FactExtractor._extract_field(parsed, field_name, default)
@@ -185,275 +162,260 @@ class FactExtractor:
                 organic_list = source_data["organic"]
             elif "results" in source_data and isinstance(source_data["results"], list):
                 organic_list = source_data["results"]
+            else:
+                # If no known key, check if data itself is a list
+                if isinstance(source_data.get("data"), list):
+                    organic_list = source_data["data"]
+        
         elif isinstance(source_data, list):
-            # If already a list, use it directly
-            if len(source_data) > 0 and isinstance(source_data[0], dict):
-                organic_list = source_data
+            # If input is already a list, use it directly
+            organic_list = source_data
         
         # Step 2: Process each result in the organic list
         if organic_list and isinstance(organic_list, list):
-            for i, result in enumerate(organic_list):
-                
+            for idx, item in enumerate(organic_list):
                 try:
-                    # Extract core fields with type-safe methods
-                    link = FactExtractor._extract_field(result, "link", "")
-                    title = FactExtractor._extract_field(result, "title", "")
-                    snippet = FactExtractor._extract_field(result, "snippet", "")
+                    # Extract fields safely using our type-safe method
+                    title = FactExtractor._extract_field(item, "title", f"Result {idx + 1}")
+                    link = FactExtractor._extract_field(item, "link", "")
+                    snippet = FactExtractor._extract_field(item, "snippet", "")
                     
-                    # Skip empty results
-                    if not link and not title:
+                    # Skip items without meaningful content
+                    if not title and not link:
                         continue
                     
-                    # Create metadata about extraction source
-                    metadata = {
-                        "extraction_index": i,
-                        "source_type": source_type,
-                        "raw_available": True
-                    }
+                    # Create source identifier (title + link for context)
+                    source_identifier = f"{title} ({link})" if link else str(title)
                     
-                    # Build structured fact
-                    fact_text = f"{title}: {snippet}" if title and snippet else (title or snippet)
+                    # Extract email addresses from snippet if present
+                    emails_in_snippet = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', snippet)
+                    
+                    for email in emails_in_snippet:
+                        facts.append(VerifiedFact(
+                            text=email,
+                            source=source_identifier,
+                            confidence_score=0.6,  # Base score for extracted email
+                            is_verified=False,
+                            cross_references=[],
+                            metadata={
+                                "extraction_type": "email_from_snippet",
+                                "original_source": f"{title} - {link}",
+                                "snippet_preview": snippet[:100] if snippet else ""
+                            }
+                        ))
+                    
+                    # Create fact for the search result itself
+                    if title:
+                        facts.append(VerifiedFact(
+                            text=f"Search Result: {title}",
+                            source=source_identifier,
+                            confidence_score=0.5,  # Base score for search result
+                            is_verified=False,
+                            cross_references=[],
+                            metadata={
+                                "extraction_type": "search_result",
+                                "link": link,
+                                "snippet": snippet[:200] if snippet else "",
+                                "result_index": idx
+                            }
+                        ))
+                        
+                except Exception as e:
+                    logger.warning(f"Error processing item {idx}: {e}")
+                    continue
+        
+        # Step 3: Handle direct list input (already structured facts)
+        elif isinstance(source_data, list):
+            for item in source_data:
+                if isinstance(item, dict):
+                    text = FactExtractor._extract_field(item, "text", str(item))
+                    source = FactExtractor._extract_field(item, "source", "Unknown")
                     
                     facts.append(VerifiedFact(
-                        text=fact_text.strip()[:500],  # Limit length for performance
-                        source=f"{title} - {link}",    # Combined source identifier
-                        confidence_score=0.6,          # Base score from search engine
-                        is_verified=False,             # Will be updated by cross-checking
-                        metadata=metadata
+                        text=str(text),
+                        source=str(source),
+                        confidence_score=0.5,
+                        is_verified=False,
+                        cross_references=[],
+                        metadata={"direct_input": True}
                     ))
-                    
-                except Exception as e:
-                    logger.warning(f"Failed to extract fact from result {i}: {e}")
-                    continue
+        
+        # Step 4: Handle single dict input (not a list)
+        elif isinstance(source_data, dict):
+            text = FactExtractor._extract_field(source_data, "text", str(source_data))
+            source = FactExtractor._extract_field(source_data, "source", "Unknown")
+            
+            facts.append(VerifiedFact(
+                text=str(text),
+                source=str(source),
+                confidence_score=0.5,
+                is_verified=False,
+                cross_references=[],
+                metadata={"single_dict_input": True}
+            ))
         
         return facts
     
-    @staticmethod
-    def normalize_email(email: str) -> str:
-        """Normalize email for comparison (lowercase, remove dots in Gmail)"""
+    def fuzzy_match_usernames(self, facts: List[Any], threshold: float = 0.8):
+        """Phase 3: Identifies similar usernames using fuzzy matching"""
+        # Filter for items that look like usernames (no @ symbol)
+        usernames = [f for f in facts if hasattr(f, 'text') and "@" not in str(f.text)]
         
-        if not isinstance(email, str):
-            return ""
-            
-        normalized = email.lower().strip()
-        
-        # Remove dots from Gmail addresses (gmail.com optimization)
-        if "@gmail.com" in normalized:
-            parts = normalized.split("@")
-            local_part = parts[0].replace(".", "")
-            normalized = f"{local_part}@{parts[-1]}"
-        
-        return normalized
+        for i, f1 in enumerate(usernames):
+            for f2 in usernames[i+1:]:
+                similarity = difflib.SequenceMatcher(None, str(f1.text), str(f2.text)).ratio()
+                if similarity >= threshold:
+                    f1.text += f" (Likely alias: {f2.text})"
 
-
-class AnalystAgent:
-    """
-    Main orchestrator for the ANALYST stage
-    
-    Performs cross-verification between search results and Leak-Lookup data.
-    Calculates confidence scores with boosts when matches are found.
-    
-    Key Features:
-    - Cross-references search results with breach database findings
-    - Increases confidence score when email matches leak lookup entries
-    - Filters high-confidence matches for reporting
-    """
-    
-    @staticmethod
-    def calculate_confidence_score(fact: VerifiedFact, 
-                                  cross_matches: List[CrossReferenceResult]) -> float:
-        """
-        Calculate final confidence score based on multiple factors
+    def apply_confidence_decay(self, fact: Any):
+        """Phase 3: Reduces confidence for older data (5% per year)"""
+        current_year = datetime.now().year
         
-        Base scoring rules:
-            - Exact email match from search engine: 0.8
-            - Partial domain match: 0.6  
-            - Name-only or snippet match: 0.4
+        if not hasattr(fact, 'text'): 
+            return
             
-        Confidence Boosts:
-            + Leak-Lookup correlation (if applicable): +0.3 per matching breach database
-            + Multiple independent sources corroborating: +0.1 each
-            + Verified source reputation: +0.2
+        year_match = re.search(r'\b(20\d{2})\b', str(fact.text))
+        
+        if year_match:
+            data_year = int(year_match.group(1))
             
-        Final score is clamped between 0 and 1.0
-        
-        Args:
-            fact: The verified fact to score
-            cross_matches: List of matches from Leak-Lookup correlation
+            years_old = max(0, current_year - data_year)
             
-        Returns:
-            Float confidence score (0.0 to 1.0)
-        """
-        
-        # Base score from search engine quality
-        base_score = fact.confidence_score
-        
-        # Apply confidence boost from leak lookup correlation
-        if cross_matches and len(cross_matches) > 0:
-            for match in cross_matches:
-                if isinstance(match, CrossReferenceResult):
-                    # Add boost based on number of breach databases found
-                    num_breaches = len(match.leaked_databases)
-                    
-                    # Cap the boost to avoid over-scoring (max +0.3 per unique database type)
-                    boost = min(0.3 * min(num_breaches, 1), 0.3)
-                    base_score += boost
-                    
-                    logger.info(f"Boosted confidence by {boost} due to leak correlation for {match.target_email}")
-        
-        # Apply source reputation bonus if available in metadata
-        if fact.metadata.get("source_reputation"):
-            base_score += 0.2
-        
-        # Clamp score between 0 and 1
-        final_score = max(0.0, min(1.0, base_score))
-        
-        return round(final_score, 2)
+            if years_old > 0:
+                penalty = min(0.5, years_old * 0.05)
+                
+                current_score = getattr(fact, 'confidence_score', 0.5)
+                fact.confidence_score = max(0.1, current_score - penalty)
 
 
 class CrossReferenceEngine:
-    """Handles cross-matching search results with Leak-Lookup findings"""
+    """Engine for cross-referencing search results with Leak-Lookup data"""
     
     def __init__(self):
-        self.email_normalizer = FactExtractor()
-        self.max_boost_per_target = 0.3
+        self.match_threshold = 0.8
     
     def perform_cross_reference(self, 
-                               search_results: List[dict],
-                               leak_lookup_findings: List[dict]) -> Dict[str, List[CrossReferenceResult]]:
+                               search_results: List[Dict], 
+                               leak_lookup_findings: List[Dict]) -> Dict[str, CrossReferenceResult]:
         """
-        Cross-reference search results with Leak-Lookup breach data
-        
-        This is the core logic that increases confidence scores when an email found
-        in a search result matches an entry found in Leak-Lookup.
+        Match search results with Leak-Lookup breach data
         
         Args:
-            search_results: List of dicts from HARVESTING stage (with link/title/snippet)
-            leak_lookup_findings: List of dicts from Leak-Lookup API
+            search_results: Results from HARVESTING stage (search engine responses)
+            leak_lookup_findings: Breach database information
             
         Returns:
-            Dictionary mapping email targets to list of cross-reference results
+            Dictionary mapping target emails to their cross-reference matches
         """
         
-        # Index leak lookup findings by normalized email for fast lookup
-        leak_index = self._index_leak_findings(leak_lookup_findings)
-        
-        # Map search result emails to their sources
-        search_emails = self._extract_search_emails(search_results)
-        
-        # Perform cross-matching
-        cross_references: Dict[str, List[CrossReferenceResult]] = {}
-        
-        for email, sources in search_emails.items():
-            normalized_email = self.email_normalizer.normalize_email(email)
-            
-            if normalized_email in leak_index:
-                leak_data = leak_index[normalized_email]
-                
-                # Create cross-reference result with boost information
-                match_result = CrossReferenceResult(
-                    target_email=email,
-                    search_source=f"Google Dork: {sources[0]}",  # First source
-                    leaked_databases=leak_data.get('databases', []),
-                    confidence_boost=self.max_boost_per_target
-                )
-                
-                cross_references[email] = [match_result]
-        
-        return cross_references
-    
-    def _index_leak_findings(self, leak_findings: List[dict]) -> Dict[str, dict]:
-        """Create lookup index from Leak-Lookup results"""
-        
-        index = {}
-        
-        for finding in leak_findings:
-            if isinstance(finding, dict):
-                target = fact_extractor._extract_field(finding, "target", "")
-                databases = fact_extractor._extract_field(finding, "breached_databases", [])
-                
-                if target and not isinstance(databases, list):
-                    databases = [str(databases)]
-                
-                normalized = self.email_normalizer.normalize_email(target)
-                
-                index[normalized] = {
-                    'target': target,
-                    'databases': databases or []
-                }
-        
-        return index
-    
-    def _extract_search_emails(self, search_results: List[dict]) -> Dict[str, List[str]]:
-        """Extract emails from search results and their sources"""
-        
-        email_sources = {}  # email -> list of dork sources
-        
+        # Extract all emails from search results
+        search_emails = set()
         for result in search_results:
-            if not isinstance(result, dict):
-                continue
+            if isinstance(result, dict):
+                organic_list = result.get('organic', [])
                 
-            link = fact_extractor._extract_field(result, "link", "")
-            title = fact_extractor._extract_field(result, "title", "")
-            
-            if not link or not title:
-                continue
-            
-            # Extract email from URL or title (simplified extraction)
-            emails_in_result = self._find_emails_in_text(link + " " + title)
-            
-            for email in emails_in_result:
-                normalized = self.email_normalizer.normalize_email(email)
-                
-                if normalized not in email_sources:
-                    email_sources[normalized] = []
-                
-                email_sources[normalized].append(f"{title} - {link}")
+                for item in organic_list:
+                    if isinstance(item, dict):
+                        snippet = str(item.get('snippet', ''))
+                        emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', snippet)
+                        search_emails.update(emails)
         
-        return email_sources
+        # Match against Leak-Lookup findings
+        matches: Dict[str, CrossReferenceResult] = {}
+        
+        for finding in leak_lookup_findings:
+            if not isinstance(finding, dict):
+                continue
+                
+            target = str(finding.get('target', ''))
+            databases = finding.get('breached_databases', [])
+            
+            # Check if this target matches any search result email
+            for search_email in search_emails:
+                if self._is_match(search_email, target):
+                    match_key = search_email.lower()
+                    
+                    matches[match_key] = CrossReferenceResult(
+                        target_email=search_email,
+                        search_source=f"Leak-Lookup match for {target}",
+                        leaked_databases=list(databases) if isinstance(databases, list) else [str(databases)],
+                        confidence_boost=0.3  # Boost from leak correlation
+                    )
+        
+        return matches
+    
+    def _is_match(self, email1: str, email2: str) -> bool:
+        """Check if two emails match (considering Gmail dot normalization)"""
+        e1 = email1.lower().strip()
+        e2 = email2.lower().strip()
+        
+        # Exact match
+        if e1 == e2:
+            return True
+        
+        # Gmail dot normalization (john.doe@gmail.com == johndoe@gmail.com)
+        if '@' in e1 and '@' in e2:
+            domain1 = e1.split('@')[1]
+            domain2 = e2.split('@')[1]
+            
+            if domain1 == domain2:  # Same domain
+                local1 = e1.split('@')[0].replace('.', '')
+                local2 = e2.split('@')[0].replace('.', '')
+                
+                if local1 == local2:
+                    return True
+        
+        return False
+
+
+class AnalystAgent:
+    """Main analyst agent for OSINT verification"""
     
     @staticmethod
-    def _find_emails_in_text(text: str) -> List[str]:
-        """Find email addresses in text using regex"""
+    def calculate_confidence_score(fact: VerifiedFact, cross_matches: List[CrossReferenceResult]) -> float:
+        """
+        Calculate final confidence score with leak correlation boost
         
-        if not isinstance(text, str):
-            return []
-            
-        pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-        matches = re.findall(pattern, text)
+        Base scores from match type:
+            - Exact email match: 0.8
+            - Partial domain match: 0.6  
+            - Name-only match: 0.4
         
-        # Filter for valid-looking emails
-        valid_emails = [email for email in matches 
-                       if len(email.split('@')[1]) >= 2]
+        + Confidence boost from leak lookup correlation (if applicable)
         
-        return list(set(valid_emails))
+        Final score clamped between 0 and 1.0
+        """
+        
+        base_score = fact.confidence_score
+        
+        # Apply boost from cross-references
+        if cross_matches:
+            max_boost = max(m.confidence_boost for m in cross_matches)
+            base_score += max_boost * len(cross_matches)
+        
+        # Clamp score between 0 and 1.0
+        return min(1.0, max(0.0, base_score))
 
 
-def verify_search_results(search_results: List[dict], 
-                         leak_lookup_findings: List[dict],
-                         min_confidence_threshold: float = 0.6) -> dict:
+def verify_search_results(
+    search_results: List[Dict], 
+    leak_lookup_findings: List[Dict] = None,
+    min_confidence_threshold: float = 0.6
+) -> Dict[str, Any]:
     """
-    Main verification function for the ANALYST stage
-    
-    This is the primary interface used by the Kanban Manager's ANALYST stage.
-    
-    Key Improvements:
-    - Properly drills down into 'organic' list to extract link/title/snippet as Facts
-    - Type-safe extraction handles dict/list without AttributeError  
-    - Cross-references with Leak-Lookup to boost confidence scores
-    - Returns structured results ready for SCRIBE stage
+    Main verification function that processes search results and applies confidence scoring
     
     Args:
-        search_results: List of dicts from HARVESTING (with link, title, snippet)
-        leak_lookup_findings: List of dicts from Leak-Lookup API
-        min_confidence_threshold: Minimum score to include in output
+        search_results: Results from HARVESTING stage (raw JSON responses)
+        leak_lookup_findings: Optional Leak-Lookup breach data for cross-referencing
+        min_confidence_threshold: Minimum score for high-confidence classification
         
     Returns:
-        dict with keys:
-            - verified_results: List of VerifiedFact objects
-            - cross_references: List of CrossReferenceResult matches
-            - high_confidence_count: Number of results above threshold
+        Dictionary with verified results, cross-references, and statistics
     """
+    
+    if leak_lookup_findings is None:
+        leak_lookup_findings = []
     
     # Extract facts from search results (drill down into organic list)
     raw_facts = []
@@ -481,7 +443,7 @@ def verify_search_results(search_results: List[dict],
         matching_matches = [
             match for match in match_map.values() 
             if any(fact.source.startswith(src) or match.target_email in fact.text 
-                   for src in match.search_source.split(":"))
+                   for src in str(match.search_source).split(":"))
         ]
         
         # Calculate final confidence score with boost from leak correlation
@@ -503,14 +465,13 @@ def verify_search_results(search_results: List[dict],
         verified_facts.append(verified_fact)
         all_cross_references.extend(matching_matches)
     
-
-
     # --- PHASE 3: FORENSIC TRIGGER ---
+    fact_extractor = FactExtractor()
     fact_extractor.fuzzy_match_usernames(verified_facts)
     for fact in verified_facts:
         fact_extractor.apply_confidence_decay(fact)
     # ---------------------------------
-
+    
     # Filter results by confidence threshold for output
     high_confidence = [f for f in verified_facts if f.confidence_score >= min_confidence_threshold]
    
@@ -558,6 +519,41 @@ def filter_high_confidence(results: List[dict], min_score: float = 0.7) -> List[
 fact_extractor = FactExtractor()
 
 
+class AnalysisReport:
+    """Wrapper class that main.py and Scribe expect to see"""
+    
+    def __init__(self, report_dict):
+        self.report = report_dict
+        # Maps the keys so the Scribe stage can find the data
+        self.facts = report_dict.get('verified_results', [])
+        self.target_name = report_dict.get('target', 'Unknown Target')
+
+
+def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
+    """
+    Bridge function for main.py to execute the ANALYST stage.
+    
+    This ensures proper data flow from HARVESTING to ANALYST stage.
+    """
+    # 1. Extract the raw results from the harvest tickets
+    raw_data = []
+    for result in harvest_output.search_results:
+        # Check if the result has the raw data we need
+        data = getattr(result, 'results_raw', None)
+        if data:
+            raw_data.append(data)
+
+    # 2. Run the forensic verification logic with Leak-Lookup integration
+    report_dict = verify_search_results(
+        search_results=raw_data,
+        leak_lookup_findings=[r.__dict__ for r in harvest_output.leak_lookup_results],
+        min_confidence_threshold=0.4
+    )
+    
+    # 3. Return it in the wrapper class main.py is looking for
+    return AnalysisReport(report_dict)
+
+
 # Example usage and testing
 async def run_demo():
     """Demonstrate analyst capabilities"""
@@ -565,14 +561,18 @@ async def run_demo():
     # Simulate search results from HARVESTING stage (Serper.dev 'organic' list format)
     sample_search_results = [
         {
-            "title": "John Doe - LinkedIn Profile",
-            "link": "https://linkedin.com/in/johndoe123",
-            "snippet": "Software engineer at TechCorp, based in San Francisco"
-        },
-        {
-            "title": "test@example.com - Breach Database Entry",
-            "link": "https://breachdb.example.com/entry/12345",
-            "snippet": "Email found in 2023 data breach collection"
+            "organic": [
+                {
+                    "title": "John Doe - LinkedIn Profile",
+                    "link": "https://linkedin.com/in/johndoe123",
+                    "snippet": "Software engineer at TechCorp, based in San Francisco. Email: john.doe@example.com"
+                },
+                {
+                    "title": "test@example.com - Breach Database Entry",
+                    "link": "https://breachdb.example.com/entry/12345",
+                    "snippet": "Email found in 2023 data breach collection"
+                }
+            ]
         }
     ]
     
@@ -605,38 +605,8 @@ async def run_demo():
         
         print(f"\nFact: {verified['text'][:50]}...")
         print(f"Source: {verified['source']}")
-        print(f"Confidence Score: {verified['confidence_score']}{boost_info}")
+        print(f"Confidence Score: {verified['confidence_score']:.2f}{boost_info}")
 
-def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
-    """
-    Bridge function for main.py to execute the ANALYST stage.
-    """
-    # 1. Extract the raw results from the harvest tickets
-    raw_data = []
-    for result in harvest_output.search_results:
-        # Check if the result has the raw data we need
-        data = getattr(result, 'results_raw', None)
-        if data:
-            raw_data.append(data)
-
-    # 2. Run the forensic verification logic
-    # This calls the function the agent just built for you
-    report_dict = verify_search_results(
-        search_results=raw_data,
-        leak_lookup_findings=[r.__dict__ for r in harvest_output.leak_lookup_results],
-        min_confidence_threshold=0.4
-    )
-    
-    # 3. Return it in the wrapper class main.py is looking for
-    return AnalysisReport(report_dict)
-
-class AnalysisReport:
-    """Wrapper class that main.py and Scribe expect to see"""
-    def __init__(self, report_dict):
-        self.report = report_dict
-        # Maps the keys so the Scribe stage can find the data
-        self.facts = report_dict.get('verified_results', [])
-        self.target_name = report_dict.get('target', 'Unknown Target')
 
 if __name__ == "__main__":
     import asyncio

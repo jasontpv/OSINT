@@ -45,5 +45,82 @@
     "updatedAt": "2026-03-19T10:18:04.787Z",
     "notes": [],
     "completedAt": "2026-03-19T10:18:04.787Z"
+  },
+  {
+    "id": "task-5",
+    "title": "Clean up old osint_pipeline subfolder interference",
+    "description": "",
+    "status": "not-started",
+    "priority": "critical",
+    "tags": [],
+    "createdAt": "2026-03-19T12:37:16.225Z",
+    "updatedAt": "2026-03-19T12:37:16.225Z",
+    "notes": []
+  },
+  {
+    "id": "task-6",
+    "title": "Fix class name mismatch: OsintKanbanManager vs OSINTKanbanManager in main.py imports",
+    "description": "",
+    "status": "not-started",
+    "priority": "critical",
+    "tags": [],
+    "createdAt": "2026-03-19T12:37:17.745Z",
+    "updatedAt": "2026-03-19T12:37:17.745Z",
+    "notes": []
+  },
+  {
+    "id": "task-7",
+    "title": "Update PipelineConfig to use **kwargs for universal config handling",
+    "description": "",
+    "status": "not-started",
+    "priority": "critical",
+    "tags": [],
+    "createdAt": "2026-03-19T12:37:18.774Z",
+    "updatedAt": "2026-03-19T12:37:18.774Z",
+    "notes": []
+  },
+  {
+    "id": "task-8",
+    "title": "Verify all stages (RECON, HARVESTING, ANALYST, SCRIBE) imported from correct root directory files",
+    "description": "",
+    "status": "not-started",
+    "priority": "critical",
+    "tags": [],
+    "createdAt": "2026-03-19T12:37:19.931Z",
+    "updatedAt": "2026-03-19T12:37:19.931Z",
+    "notes": []
+  },
+  {
+    "id": "task-9",
+    "title": "Fix all remaining references to OsintKanbanManager in test files and documentation",
+    "description": "",
+    "status": "not-started",
+    "priority": "high",
+    "tags": [],
+    "createdAt": "2026-03-19T12:37:20.995Z",
+    "updatedAt": "2026-03-19T12:37:20.995Z",
+    "notes": []
+  },
+  {
+    "id": "task-10",
+    "title": "Test complete pipeline execution with sample command",
+    "description": "",
+    "status": "not-started",
+    "priority": "critical",
+    "tags": [],
+    "createdAt": "2026-03-19T12:37:21.978Z",
+    "updatedAt": "2026-03-19T12:37:21.978Z",
+    "notes": []
+  },
+  {
+    "id": "task-11",
+    "title": "Step 1: Verify osint_pipeline folder status and cleanup if needed",
+    "description": "",
+    "status": "not-started",
+    "priority": "critical",
+    "tags": [],
+    "createdAt": "2026-03-19T12:42:28.442Z",
+    "updatedAt": "2026-03-19T12:42:28.442Z",
+    "notes": []
   }
 ]

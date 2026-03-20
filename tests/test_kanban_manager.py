@@ -84,7 +84,7 @@ class TestKanbanManager:
             api_keys={}
         )
         
-        manager = OsintKanbanManager(config=config)
+        manager = OSINTKanbanManager(config=config)
         
         assert len(manager.columns["RECON"]) == 0
         assert not manager.is_running()
@@ -103,7 +103,7 @@ class TestWipLimits:
             api_keys={}
         )
         
-        manager = OsintKanbanManager(config=config)
+        manager = OSINTKanbanManager(config=config)
         
         # Simulate adding items to RECON column
         for i in range(5):
@@ -128,7 +128,7 @@ class TestWipLimits:
             api_keys={}
         )
         
-        manager = OsintKanbanManager(config=config)
+        manager = OSINTKanbanManager(config=config)
         
         # Fill RECON column to capacity
         for i in range(3):
@@ -159,7 +159,7 @@ class TestErrorHandling:
             recovery_time_after_failure=60
         )
         
-        manager = OsintKanbanManager(config=config)
+        manager = OSINTKanbanManager(config=config)
         
         # Simulate multiple failures to trigger circuit breaker
         for i in range(5):
@@ -193,7 +193,7 @@ class TestErrorHandling:
             max_retries_per_ticket=1  # Low retry for testing
         )
         
-        manager = OsintKanbanManager(config=config)
+        manager = OSINTKanbanManager(config=config)
         
         # Simulate failure but with graceful handling enabled
         try:
