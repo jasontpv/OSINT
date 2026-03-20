@@ -134,7 +134,8 @@ class TestAnalystStage:
         
         assert len(conflicts) >= 1
         
-    def test_manual_review_queue_population(self):
+    @pytest.mark.asyncio
+    async def test_manual_review_queue_population(self):
         """Test that low-confidence items go to manual review queue"""
         
         mock_harvest_output = MockHarvestOutput(
