@@ -111,6 +111,7 @@ class FactExtractor:
             # Case 3: Data is a string - attempt to parse as JSON
             elif isinstance(data, str):
                 try:
+                    import json
                     parsed = json.loads(data)
                     return FactExtractor._extract_field(parsed, field_name, default)
                 except (json.JSONDecodeError, TypeError):
