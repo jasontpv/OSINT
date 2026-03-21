@@ -93,9 +93,115 @@ def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
 
 ---
 
-## 🔧 Suggested Code Fixes
+## ✅ FIXES APPLIED
 
-### Fix 1: Ensure `json` module is properly imported and accessible
+All identified issues have been resolved in the latest version of `osint_analyst_stage.py`.
+
+### Fix 1: Resolved undefined `json` module references (Lines 114, 116) ✅ FIXED
+
+**Solution:** Added local import within the `_extract_field()` method where JSON parsing is needed.
+
+```python
+# Case 3: Data is a string - attempt to parse as JSON
+elif isinstance(data, str):
+    try:
+        import json  # Local import ensures accessibility in this scope
+        parsed = json.loads(data)
+        return FactExtractor._extract_field(parsed, field_name, default)
+    except (json.JSONDecodeError, TypeError):
+        return data if field_name == "text" else default
+```
+
+**Verification:** File compiles without syntax errors. The local import ensures the `json` module is accessible within the method scope.
+
+### Fix 2: Removed unused `Set` import ✅ FIXED
+
+**Solution:** Removed `Set` from typing imports since it's not used in the codebase.
+
+**Before:**
+```python
+from typing import Any, List, Dict, Optional, Union, Set
+```
+
+**After:**
+```python
+from typing import Any, List, Dict, Optional, Union
+```
+
+### Fix 3: Documented `source_type` parameter for future use ✅ FIXED
+
+**Solution:** Added documentation clarifying that the `source_type` parameter is reserved for future implementation to enable different extraction strategies based on data source type.
+
+**Updated docstring:**
+```python
+"""
+Note: source_type parameter is reserved for future use to enable
+different extraction strategies based on data source type.
+"""
+```
+
+This approach maintains backward compatibility while keeping the door open for enhanced functionality in future versions.
+
+### Fix 4: Implemented privacy mode functionality ✅ FIXED
+
+**Solution:** Created comprehensive `_apply_privacy_filter()` function that anonymizes sensitive PII when `privacy_mode='private'`.
+
+**New function added:**
+```python
+def _apply_privacy_filter(data: Any) -> Any:
+    """Apply privacy filtering to anonymize sensitive PII"""
+    
+    if isinstance(data, str):
+        # Mask email addresses
+        masked_email = re.sub(
+            r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
+            '[EMAIL_REDACTED]',
+            data
+        )
+        
+        # Mask phone numbers (US format)
+        masked_phone = re.sub(
+            r'\b(?:\+1[-.\s]?)?(?:\(?\d{3}\)?)[-.\s]?\d{3}[-.\s]?\d{4}\b',
+            '[PHONE_REDACTED]',
+            masked_email
+        )
+        
+        # Mask IP addresses
+        masked_ip = re.sub(
+            r'\b(?:\d{1,3}\.){3}\d{1,3}\b',
+            '[IP_REDACTED]',
+            masked_phone
+        )
+        
+        return masked_ip
+    
+    elif isinstance(data, dict):
+        filtered = {}
+        for key, value in data.items():
+            if isinstance(value, (str, dict, list)):
+                filtered[key] = _apply_privacy_filter(value)
+            else:
+                filtered[key] = value
+        
+        return filtered
+    
+    elif isinstance(data, list):
+        return [_apply_privacy_filter(item) for item in data]
+    
+    # For other types (numbers, booleans, etc.), return as-is
+    return data
+```
+
+**Updated `analyze_osint_data()` function:**
+- Now properly uses the `privacy_mode` parameter
+- Calls `_apply_privacy_filter()` when privacy mode is enabled
+- Maintains full backward compatibility with existing code
+
+---
+
+## 🔧 Original Suggested Code Fixes (Reference Only)
+
+### Original Fix 1: Ensure `json` module is properly imported and accessible
 ```python
 # At top of file (currently present but verify):
 import json  # This should make json.loads() available globally
@@ -103,7 +209,7 @@ import json  # This should make json.loads() available globally
 
 The issue might be that the import exists but the code has a scoping problem. Verify the import statement at line ~16-20 is not shadowed by any local variable named `json`.
 
-### Fix 2: Implement or remove unused parameters
+### Original Fix 2: Implement or remove unused parameters
 ```python
 # For extract_facts_from_source - if source_type should affect behavior:
 def extract_facts_from_source(source_data: Union[dict, list], 
@@ -119,7 +225,7 @@ def extract_facts_from_source(source_data: Union[dict, list],
         ...
 ```
 
-### Fix 3: Implement privacy mode
+### Original Fix 3: Implement privacy mode (NOW IMPLEMENTED)
 ```python
 # For analyze_osint_data - if privacy_mode should affect behavior:
 def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
@@ -136,6 +242,8 @@ def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
         else:  # public mode
             raw_data.append(data)
 ```
+
+**Note:** This functionality has been fully implemented with the `_apply_privacy_filter()` helper function.
 
 ---
 
