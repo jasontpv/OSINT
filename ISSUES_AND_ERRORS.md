@@ -62,11 +62,13 @@ def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
 
 ## 📊 Summary Statistics
 
-| Category | Count | Severity |
-|----------|-------|----------|
-| Critical Errors (Undefined) | 2 | 🔴 HIGH |
-| Warnings (Unused Elements) | 3 | ⚠️ LOW-MEDIUM |
-| **Total Issues** | **5** | - |
+### Before Fixes:
+
+| Category | Count | Severity | Status |
+|----------|-------|----------|--------|
+| Critical Errors (Undefined) | 2 | 🔴 HIGH | ✅ FIXED |
+| Warnings (Unused Elements) | 3 | ⚠️ LOW-MEDIUM | ✅ FIXED |
+| **Total Issues** | **5** | - | ✅ ALL RESOLVED |
 
 ---
 
