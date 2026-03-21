@@ -528,50 +528,52 @@ class AnalysisReport:
     
     def __init__(self, report_dict):
         self.report = report_dict
-        # Maps the keys so the Scribe stage can find the data
-        self.facts = report_dict.get('verified_results', [])
         self.target_name = report_dict.get('target', 'Unknown Target')
+        raw_facts = report_dict.get('verified_results', [])
+        self.facts = [
+            f.__dict__ if hasattr(f, '__dict__') else f 
+            for f in raw_facts
+        ]
 
-
-def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
-    """
-    Bridge function for main.py to execute the ANALYST stage.
-    
-    This ensures proper data flow from HARVESTING to ANALYST stage.
-    
-    Args:
-        harvest_output: Output object from HARVESTING stage containing search_results
-                       and leak_lookup_results attributes
-        privacy_mode: Privacy processing mode ('public' or 'private')
-                     - 'public': Full data exposure for verification
-                     - 'private': Anonymizes sensitive PII before analysis
-    
-    Returns:
-        AnalysisReport object with verified results and confidence scores
-    """
-    
-    # 1. Extract the raw results from the harvest tickets
-    raw_data = []
-    for result in harvest_output.search_results:
-        # Check if the result has the raw data we need
-        data = getattr(result, 'results_raw', None)
+    def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
+        """
+        Bridge function for main.py to execute the ANALYST stage.
         
-        if data:
-            # Apply privacy filtering based on mode
-            if privacy_mode == 'private':
-                data = _apply_privacy_filter(data)
+        This ensures proper data flow from HARVESTING to ANALYST stage.
+        
+        Args:
+            harvest_output: Output object from HARVESTING stage containing search_results
+                        and leak_lookup_results attributes
+            privacy_mode: Privacy processing mode ('public' or 'private')
+                        - 'public': Full data exposure for verification
+                        - 'private': Anonymizes sensitive PII before analysis
+        
+        Returns:
+            AnalysisReport object with verified results and confidence scores
+        """
+        
+        # 1. Extract the raw results from the harvest tickets
+        raw_data = []
+        for result in harvest_output.search_results:
+            # Check if the result has the raw data we need
+            data = getattr(result, 'results_raw', None)
             
-            raw_data.append(data)
+            if data:
+                # Apply privacy filtering based on mode
+                if privacy_mode == 'private':
+                    data = _apply_privacy_filter(data)
+                
+                raw_data.append(data)
 
-    # 2. Run the forensic verification logic with Leak-Lookup integration
-    report_dict = verify_search_results(
-        search_results=raw_data,
-        leak_lookup_findings=[r.__dict__ for r in harvest_output.leak_lookup_results],
-        min_confidence_threshold=0.4
-    )
+         # 2. Run the forensic verification
+        report_dict = verify_search_results(
+            search_results=raw_data,
+            leak_lookup_findings=[r.__dict__ for r in harvest_output.leak_lookup_results],
+            min_confidence_threshold=0.4
+        )
     
-    # 3. Return it in the wrapper class main.py is looking for
-    return AnalysisReport(report_dict)
+        # 3. Return the wrapper (The class __init__ now handles the dictionary conversion)
+        return AnalysisReport(report_dict)
 
 
 def _apply_privacy_filter(data: Any) -> Any:

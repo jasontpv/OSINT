@@ -28,12 +28,14 @@ import base64
 
 @dataclass
 class ReportConfig:
+    
     """Configuration for report generation"""
     title: str
     target: str
     generated_at: datetime
     facts: List[Dict]
     include_evidence: bool = True
+    taglines: str = "Intelligence Report"
     confidentiality_level: str = 'INTERNAL'  # PUBLIC, INTERNAL, CONFIDENTIAL
 
 
@@ -163,7 +165,12 @@ class Jinja2ReportGenerator:
 </body>
 </html>'''
         template = self.env.from_string(template_content)
-        return template.render(
+
+        for fact in config.facts:
+            if isinstance(fact, dict) and 'confidence' not in fact:
+                fact['confidence'] = 0.5  # Default to 50% if missing
+  
+        return template.render(     
             config=config,
             facts=config.facts,
             generated_at=config.generated_at,
@@ -230,7 +237,7 @@ class ReportLabPDFGenerator:
             facts_data.append([
                 str(fact.get('type', '')),
                 str(fact.get('value', ''))[:50],
-                f"{fact['confidence']*100:.1f}%",
+                f"{fact.get('confidence', 0.5)*100:.1f}%"
                 ', '.join(str(s) for s in fact.get('sources', []))[:30]
             ])
 
