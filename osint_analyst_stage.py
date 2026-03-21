@@ -538,13 +538,29 @@ def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
     Bridge function for main.py to execute the ANALYST stage.
     
     This ensures proper data flow from HARVESTING to ANALYST stage.
+    
+    Args:
+        harvest_output: Output object from HARVESTING stage containing search_results
+                       and leak_lookup_results attributes
+        privacy_mode: Privacy processing mode ('public' or 'private')
+                     - 'public': Full data exposure for verification
+                     - 'private': Anonymizes sensitive PII before analysis
+    
+    Returns:
+        AnalysisReport object with verified results and confidence scores
     """
+    
     # 1. Extract the raw results from the harvest tickets
     raw_data = []
     for result in harvest_output.search_results:
         # Check if the result has the raw data we need
         data = getattr(result, 'results_raw', None)
+        
         if data:
+            # Apply privacy filtering based on mode
+            if privacy_mode == 'private':
+                data = _apply_privacy_filter(data)
+            
             raw_data.append(data)
 
     # 2. Run the forensic verification logic with Leak-Lookup integration
@@ -556,6 +572,63 @@ def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
     
     # 3. Return it in the wrapper class main.py is looking for
     return AnalysisReport(report_dict)
+
+
+def _apply_privacy_filter(data: Any) -> Any:
+    """
+    Apply privacy filtering to anonymize sensitive PII
+    
+    This function strips or masks personally identifiable information
+    based on privacy mode settings, while maintaining analysis capability.
+    
+    Args:
+        data: Input data which can be dict, list, string, or other types
+        
+    Returns:
+        Filtered data with PII anonymized/masked appropriately
+    """
+    
+    if isinstance(data, str):
+        # Mask email addresses
+        masked_email = re.sub(
+            r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
+            '[EMAIL_REDACTED]',
+            data
+        )
+        
+        # Mask phone numbers (common US format)
+        masked_phone = re.sub(
+            r'\b(?:\+1[-.\s]?)?(?:\(?\d{3}\)?)[-.\s]?\d{3}[-.\s]?\d{4}\b',
+            '[PHONE_REDACTED]',
+            masked_email
+        )
+        
+        # Mask IP addresses
+        masked_ip = re.sub(
+            r'\b(?:\d{1,3}\.){3}\d{1,3}\b',
+            '[IP_REDACTED]',
+            masked_phone
+        )
+        
+        return masked_ip
+    
+    elif isinstance(data, dict):
+        # Recursively filter dictionary values
+        filtered = {}
+        for key, value in data.items():
+            if isinstance(value, (str, dict, list)):
+                filtered[key] = _apply_privacy_filter(value)
+            else:
+                filtered[key] = value
+        
+        return filtered
+    
+    elif isinstance(data, list):
+        # Recursively filter list items
+        return [_apply_privacy_filter(item) for item in data]
+    
+    # For other types (numbers, booleans, etc.), return as-is
+    return data
 
 
 # Example usage and testing
