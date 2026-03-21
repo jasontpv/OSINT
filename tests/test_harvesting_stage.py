@@ -5,9 +5,13 @@ from unittest.mock import AsyncMock, patch
 from osint_harvesting_stage import (
     execute_osint_harvest, 
     HarvestOutput,
-    SearchResult,
-    RateLimitError
+    SearchResult
 )
+
+# Define RateLimitError locally since it's not exported from the module
+class RateLimitError(Exception):
+    """Custom rate limit error for testing"""
+    pass
 
 
 class TestHarvestingStage:

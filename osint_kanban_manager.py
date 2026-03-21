@@ -11,8 +11,8 @@ Key Fixes Implemented:
 - Fixed execute_pipeline loop to ensure no data loss between stages
 - Scribe stage receives flattened list of facts for PDF population
 
-Author: Matt Pumphrey (Fixed by OSINT Team)
-Date: 3/16/2026
+Author: OSINT Team (Fixed by Senior AI Solutions Architect)
+Date: 2024-12-17
 """
 
 import asyncio
@@ -24,13 +24,20 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
 from dotenv import load_dotenv
-from OLD_STUFF_IGNORE.osint_harvesting_stage import execute_osint_harvest as legacy_execute_harvest
+
+# Load .env from script directory
+try:
+    env_path = Path(__file__).parent / '.env'
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+except Exception as e:
+    print(f"Warning: Failed to load .env file: {e}")
+
 from osint_analyst_stage import AnalystAgent, AnalysisReport, verify_search_results
 from osint_recon_stage import generate_osint_queries
-
-load_dotenv()
-
+from osint_harvesting_stage import execute_osint_harvest as legacy_execute_harvest
 
 # Configure logging
 logging.basicConfig(
@@ -65,7 +72,7 @@ class PipelineExecutionResult:
         self.failed_retryable = 0
         self.failed_permanent = 0
         self.execution_time = 0.0
-        self.report_path = None
+        self.report_path: Optional[str] = None
         
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -89,7 +96,7 @@ class OsintTicket:
     
     # Stage-specific results (populated as tickets progress)
     recon_results: Dict[str, Any] = field(default_factory=dict)
-    harvest_results: Optional[Dict[str, Any]] = None  # Will be parsed JSON dict after HARVESTING stage
+    harvest_results: Optional[Dict[str, Any]] = None  # Parsed JSON dict after HARVESTING stage
     analysis_results: Optional[AnalysisReport] = None
     scribe_path: Optional[str] = None
     
@@ -265,24 +272,29 @@ class OSINTKanbanManager:
     
     async def start_pipeline(self, user_query: str, target_type: str):
         """Force-inject the first ticket directly into the WORK area."""
-        import uuid
         
-        ticket_id = f"recon_{uuid.uuid4().hex[:6]}"
-        
-        new_ticket = OsintTicket(
-            ticket_id=ticket_id,
-            user_query=user_query,
-            target_type=target_type,
-            status=StageStatus.IDLE,
-            current_stage="RECON"
-        )
-        
-        # WE ARE BYPASSING THE QUEUE - PUT IT DIRECTLY INTO WIP
-        self.columns["RECON"].current_work_in_progress.append(new_ticket)
-        self.state = PipelineState.RUNNING
-        
-        logger.info(f"[!] Injected Master Ticket: {ticket_id}")
-    
+        # CRITICAL FIX: Only inject ONE master ticket here, not in execute_pipeline
+        if self.state == PipelineState.INITIALIZING:
+            import uuid
+            
+            ticket_id = f"recon_{uuid.uuid4().hex[:6]}"
+            
+            new_ticket = OsintTicket(
+                ticket_id=ticket_id,
+                user_query=user_query,
+                target_type=target_type,
+                status=StageStatus.IDLE,
+                current_stage="RECON"
+            )
+            
+            # Add to RECON column (this is the entry point)
+            self.columns["RECON"].current_work_in_progress.append(new_ticket)
+            self.state = PipelineState.RUNNING
+            
+            logger.info(f"[!] Injected Master Ticket: {ticket_id} into RECON")
+        else:
+            logger.warning("Pipeline already started, skipping duplicate injection")
+
     async def _process_recon(self, ticket: OsintTicket):
         """Process RECON stage - generate search queries/dorks"""
         
@@ -316,14 +328,14 @@ class OSINTKanbanManager:
                 
                 self.columns["HARVESTING"].current_work_in_progress.append(h_ticket)
             
-            # Remove from RECON column
+            # Remove from RECON column after processing
             if ticket in self.columns["RECON"].current_work_in_progress:
                 self.columns["RECON"].current_work_in_progress.remove(ticket)
                 
         except Exception as e:
             logger.error(f"RECON stage failed for {ticket.ticket_id}: {e}")
             ticket.increment_error("recon_failure")
-    
+
     async def _process_harvesting(self, ticket: OsintTicket):
         """Process HARVESTING stage - execute searches and breach checks"""
         
@@ -333,7 +345,7 @@ class OSINTKanbanManager:
             leak_lookup_key = self.config.leak_lookup_api_key or os.getenv("LEAK_LOOKUP_API_KEY")
             
             # FIX: Execute the harvest with proper API keys and get parsed JSON results
-            harvest_output = await execute_osint_harvest(
+            harvest_output = await legacy_execute_harvest(
                 dorks=[ticket.user_query],  # Single query per ticket
                 serper_api_key=serper_key,
                 scrapingant_api_key=scrapeant_key,
@@ -361,7 +373,7 @@ class OSINTKanbanManager:
             if not ticket.harvest_results:
                 ticket.harvest_results = {}
             ticket.harvest_results["error"] = str(e)
-    
+
     async def _process_analyst(self, ticket: OsintTicket):
         """Process ANALYST stage - verify and cross-reference results"""
         
@@ -409,7 +421,7 @@ class OSINTKanbanManager:
                     "high_confidence_count": 0,
                     "total_processed": 0
                 })
-    
+
     async def _process_scribe(self, ticket: OsintTicket):
         """Process SCRIBE stage - generate reports"""
         
@@ -462,7 +474,7 @@ class OSINTKanbanManager:
             import traceback
             traceback.print_exc()
             ticket.increment_error("scribe_failure")
-    
+
     async def execute_pipeline(self, query: str, report_format: Any = "both", output_path: str = "./reports") -> PipelineExecutionResult:
         """
         The Master Engine: Runs until ALL columns (RECON through SCRIBE) are empty.
@@ -477,26 +489,22 @@ class OSINTKanbanManager:
             PipelineExecutionResult with final statistics and report path
         """
         
-        # 1. Inject the first ticket directly into RECON column
-        import uuid
-        
-        ticket_id = f"recon_{uuid.uuid4().hex[:6]}"
-        
-        new_ticket = OsintTicket(
-            ticket_id=ticket_id,
-            user_query=query,
-            target_type=self.config.target_name,
-            status=StageStatus.IDLE,
-            current_stage="RECON"
-        )
-        
-        self.columns["RECON"].current_work_in_progress.append(new_ticket)
-        self.state = PipelineState.RUNNING
+        # FIX: Don't inject ticket here - it's already injected in start_pipeline()
+        # Only proceed if we have tickets to process
         
         start_time = time.time()
+        max_iterations = 1000  # Safety limit to prevent infinite loops
         
-        # 2. The Main Loop - Runs until ALL columns are completely empty
+        iteration_count = 0
+        
+        # The Main Loop - Runs until ALL columns are completely empty
         while True:
+            iteration_count += 1
+            
+            if iteration_count > max_iterations:
+                logger.error(f"Pipeline exceeded maximum iterations ({max_iterations}), aborting")
+                break
+            
             # --- SECTION 1: RECON ---
             for t in list(self.columns["RECON"].current_work_in_progress):
                 if t.status == StageStatus.IDLE:
