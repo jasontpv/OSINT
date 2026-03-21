@@ -150,6 +150,9 @@ class FactExtractor:
             2. Iterate through organic results list
             3. Extract link, title, snippet for each result
             4. Create structured facts ready for confidence scoring
+        
+        Note: source_type parameter is reserved for future use to enable
+        different extraction strategies based on data source type.
         """
         
         facts = []
