@@ -34,5 +34,60 @@
     "updatedAt": "2026-03-22T00:23:16.993Z",
     "notes": [],
     "completedAt": "2026-03-22T00:23:16.993Z"
+  },
+  {
+    "id": "task-17",
+    "title": "Fix critical syntax and logic errors in osint_cli_wrapper.py",
+    "description": "Fix syntax errors in osint_cli_wrapper.py (duplicate decorators, missing return statements)",
+    "status": "in-progress",
+    "priority": "critical",
+    "tags": [],
+    "createdAt": "2026-03-22T00:32:29.893Z",
+    "updatedAt": "2026-03-22T00:34:04.825Z",
+    "notes": []
+  },
+  {
+    "id": "task-18",
+    "title": "Fix critical errors in analysis_report.py",
+    "description": "Fix missing return statements, static method decorator issues, data flow mismatches, and hardcoded variables in analysis_report.py",
+    "status": "not-started",
+    "priority": "critical",
+    "tags": [],
+    "createdAt": "2026-03-22T00:32:32.908Z",
+    "updatedAt": "2026-03-22T00:32:32.908Z",
+    "notes": []
+  },
+  {
+    "id": "task-19",
+    "title": "Fix high severity issues in data_pipeline.py",
+    "description": "Add thread safety fixes, path traversal validation, error handling for API keys, and fix race conditions in data_pipeline.py",
+    "status": "not-started",
+    "priority": "high",
+    "tags": [],
+    "createdAt": "2026-03-22T00:32:36.154Z",
+    "updatedAt": "2026-03-22T00:32:36.154Z",
+    "notes": []
+  },
+  {
+    "id": "task-20",
+    "title": "Fix high severity issues in utils_helpers.py",
+    "description": "Fix connection pool lock contention, threaded output capture, and privacy filtering inconsistencies in utils_helpers.py",
+    "status": "not-started",
+    "priority": "high",
+    "tags": [],
+    "createdAt": "2026-03-22T00:32:39.135Z",
+    "updatedAt": "2026-03-22T00:32:39.135Z",
+    "notes": []
+  },
+  {
+    "id": "task-21",
+    "title": "Fix redundancy issues across codebase",
+    "description": "Remove redundant singleton patterns, duplicate output capture logic, and fix hardcoded API endpoints across all files",
+    "status": "not-started",
+    "priority": "medium",
+    "tags": [],
+    "createdAt": "2026-03-22T00:32:42.114Z",
+    "updatedAt": "2026-03-22T00:32:42.114Z",
+    "notes": []
   }
 ]
