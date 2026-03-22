@@ -27,6 +27,38 @@ logger = logging.getLogger("osint_analyst")
 
 
 @dataclass 
+class CandidateEntity:
+    """Represents a candidate entity with consensus detection metadata"""
+    
+    entity_id: str
+    source_types: List[str]
+    matched_fields: Dict[str, Any]
+    confidence_score: float
+    verification_status: "EntityVerificationStatus" = EntityVerificationStatus.PENDING
+
+
+class EntityVerificationStatus:
+    """Enum-like class for entity verification statuses"""
+    
+    PENDING = "pending"
+    VERIFIED = "verified"
+    CONFLICTING = "conflicting"
+    LOW_CONFIDENCE = "low_confidence"
+    
+    @classmethod
+    def from_score(cls, score: float) -> str:
+        """Determine status based on confidence score"""
+        if score >= 0.8:
+            return cls.VERIFIED
+        elif score >= 0.5:
+            return cls.PENDING
+        elif score < 0.3:
+            return cls.LOW_CONFIDENCE
+        else:
+            return cls.CONFLICTING
+
+
+@dataclass 
 class CrossReferenceResult:
     """Represents a match between search results and Leak-Lookup findings"""
     
