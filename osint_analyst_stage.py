@@ -585,9 +585,8 @@ class AnalysisReport:
             f.__dict__ if hasattr(f, '__dict__') else f 
             for f in raw_facts
         ]
-
 @staticmethod
-    def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
+def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
         """
         Bridge function for main.py to execute the ANALYST stage.
         
