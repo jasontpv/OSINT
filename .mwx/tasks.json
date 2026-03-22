@@ -63,11 +63,11 @@
     "id": "task-19",
     "title": "Fix high severity issues in data_pipeline.py",
     "description": "Add thread safety fixes, path traversal validation, error handling for API keys, and fix race conditions in data_pipeline.py",
-    "status": "not-started",
+    "status": "in-progress",
     "priority": "high",
     "tags": [],
     "createdAt": "2026-03-22T00:32:36.154Z",
-    "updatedAt": "2026-03-22T00:32:36.154Z",
+    "updatedAt": "2026-03-22T00:42:29.797Z",
     "notes": []
   },
   {

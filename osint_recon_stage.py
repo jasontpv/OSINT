@@ -45,7 +45,6 @@ class ReconEngine:
     - Rate-limiting aware query structuring
     - Hallucination prevention through verifiable patterns
     """
-    domain = "example.com" 
 
     def __init__(self):
         # Pattern-based entity detection rules
@@ -71,12 +70,11 @@ class ReconEngine:
         self.dork_templates = {
             EntityType.PERSON: [
                 'site:linkedin.com/in/ "{entity}" -intitle:jobs',
-                '"{entity}" "email" OR "contact" site:*,com',
+                '"{entity}" "email" OR "contact" site:*',
                 '"{entity}" (twitter|X) OR (instagram|facebook)',
                 '{entity} filetype:pdf OR filetype:pptx',
                 'site:github.com "{entity}" -repo:',
                 '"{entity}" (bio OR profile) site:*',
-                '"{entity}" -site:{domain}',  # Exclude known sites for fresh finds
                 'intext:"{entity}" (resume OR cv OR "curriculum")',
             ],
             EntityType.COMPANY: [
@@ -87,7 +85,7 @@ class ReconEngine:
                 '"{entity}" (integration OR "partner")',
                 'site:github.com/orgs/ {entity}',
                 '"{entity}" filetype:json OR filetype:yml',  # Config/API files
-                'intext:"{entity}" AND ("API key" OR "secret") -site:*,com',
+                'intext:"{entity}" AND ("API key" OR "secret") -site:*',
             ],
         }
 
@@ -184,11 +182,10 @@ class ReconEngine:
         for etype in entity_types:
             if etype == EntityType.PERSON.value and entities['persons']:
                 person = entities['persons'][0]
-                templates = self.dork_templates[EntityType.PERSON]
                 
                 # Generate varied dorks with different operators
                 base_dorks = [
-                    f'site:{self.domain} "{person}" -intitle:job',
+                    f'"{person}" -intitle:job',
                     f'"{person}" (email|phone|contact) site:*',
                     f'{person} filetype:pdf OR filetype:pptx',
                     f'site:linkedin.com/in/ "{person}"',
@@ -200,12 +197,12 @@ class ReconEngine:
             elif etype == EntityType.COMPANY.value and entities['companies']:
                 company = entities['companies'][0]
                 
-                # Company-specific dorks
+                # Company-specific dorks (removed hardcoded domain)
                 company_dorks = [
                     f'site:linkedin.com/company "{company}"',
                     f'"{company}" OR "{company} Inc" site:*',
-                    f'{company} (API OR "developer") -site:{self.domain}',
-                    f'intext:"{company}" ("API key" OR secret) -site:*,com',
+                    f'{company} (API OR "developer") -site:*',
+                    f'intext:"{company}" ("API key" OR secret) -site:*',
                 ]
                 
                 dorks.extend([{'query': q, 'type': 'dork', 'confidence': 0.90} for q in company_dorks])
@@ -320,7 +317,7 @@ class ReconEngine:
         
         # Step 5: Return structured output
         return ReconOutput(
-            queries=[str(d['query']) for d in dorks_filtered], # <--- FIX: Use the 'dorks_filtered' list
+            queries=[str(d['query']) for d in dorks_filtered],
             api_queries=api_filtered,
             entity_types=entity_types,
             confidence_scores={k: round(v, 2) for k, v in confidence_scores.items()}
@@ -379,7 +376,7 @@ if __name__ == "__main__":
             print("\n🔍 GOOGLE DORKS (First 10):")
             for i, dork in enumerate(output.queries[:10], 1):
                 confidence = next((d['confidence'] for d in 
-                    [ ReconEngine().generate_dorks(['person'], {'persons': test_input.split(',')[0].strip()}) ]), 0.8)
+                    [ReconEngine().generate_dorks(['person'], {'persons': test_input.split(',')[0].strip()})]), 0.8)
                 print(f"  {i}. [{confidence:.2f}] {dork}")
             
             # Display API queries (as requested - up to 8)
