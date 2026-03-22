@@ -138,6 +138,8 @@ class FactExtractor:
         This method specifically handles the Serper.dev 'organic' list structure
         and extracts link, title, snippet as individual facts.
         
+        FIXED: Privacy filtering now applied consistently at extraction point for all paths.
+        
         Args:
             source_data: Raw data from search engine (dict or list)
             source_type: Type of source ("serper_dev", "leak_lookup", etc.)
@@ -149,7 +151,8 @@ class FactExtractor:
             1. Check if 'organic' key exists in response
             2. Iterate through organic results list
             3. Extract link, title, snippet for each result
-            4. Create structured facts ready for confidence scoring
+            4. Apply privacy filtering consistently at extraction point
+            5. Create structured facts ready for confidence scoring
         
         Note: source_type parameter is reserved for future use to enable
         different extraction strategies based on data source type.
@@ -191,8 +194,13 @@ class FactExtractor:
                     # Create source identifier (title + link for context)
                     source_identifier = f"{title} ({link})" if link else str(title)
                     
-                    # Extract email addresses from snippet if present
-                    emails_in_snippet = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', snippet)
+                    # FIXED: Apply privacy filtering consistently at extraction point
+                    filtered_title = _apply_privacy_filter(title) if isinstance(title, str) else title
+                    filtered_link = _apply_privacy_filter(link) if isinstance(link, str) else link
+                    filtered_snippet = _apply_privacy_filter(snippet) if isinstance(snippet, str) else snippet
+                    
+                    # Extract email addresses from filtered snippet if present
+                    emails_in_snippet = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', filtered_snippet)
                     
                     for email in emails_in_snippet:
                         facts.append(VerifiedFact(
@@ -203,23 +211,23 @@ class FactExtractor:
                             cross_references=[],
                             metadata={
                                 "extraction_type": "email_from_snippet",
-                                "original_source": f"{title} - {link}",
-                                "snippet_preview": snippet[:100] if snippet else ""
+                                "original_source": f"{filtered_title} - {filtered_link}",
+                                "snippet_preview": filtered_snippet[:100] if filtered_snippet else ""
                             }
                         ))
                     
                     # Create fact for the search result itself
-                    if title:
+                    if filtered_title:
                         facts.append(VerifiedFact(
-                            text=f"Search Result: {title}",
+                            text=f"Search Result: {filtered_title}",
                             source=source_identifier,
                             confidence_score=0.5,  # Base score for search result
                             is_verified=False,
                             cross_references=[],
                             metadata={
                                 "extraction_type": "search_result",
-                                "link": link,
-                                "snippet": snippet[:200] if snippet else "",
+                                "link": filtered_link,
+                                "snippet": filtered_snippet[:200] if filtered_snippet else "",
                                 "result_index": idx
                             }
                         ))
@@ -235,9 +243,13 @@ class FactExtractor:
                     text = FactExtractor._extract_field(item, "text", str(item))
                     source = FactExtractor._extract_field(item, "source", "Unknown")
                     
+                    # FIXED: Apply privacy filtering consistently at extraction point
+                    filtered_text = _apply_privacy_filter(str(text)) if isinstance(text, str) else text
+                    filtered_source = _apply_privacy_filter(str(source)) if isinstance(source, str) else source
+                    
                     facts.append(VerifiedFact(
-                        text=str(text),
-                        source=str(source),
+                        text=filtered_text,
+                        source=filtered_source,
                         confidence_score=0.5,
                         is_verified=False,
                         cross_references=[],
@@ -249,9 +261,13 @@ class FactExtractor:
             text = FactExtractor._extract_field(source_data, "text", str(source_data))
             source = FactExtractor._extract_field(source_data, "source", "Unknown")
             
+            # FIXED: Apply privacy filtering consistently at extraction point
+            filtered_text = _apply_privacy_filter(str(text)) if isinstance(text, str) else text
+            filtered_source = _apply_privacy_filter(str(source)) if isinstance(source, str) else source
+            
             facts.append(VerifiedFact(
-                text=str(text),
-                source=str(source),
+                text=filtered_text,
+                source=filtered_source,
                 confidence_score=0.5,
                 is_verified=False,
                 cross_references=[],
