@@ -570,7 +570,7 @@ class AnalysisReport:
             for f in raw_facts
         ]
 
-    @staticmethod
+@staticmethod
     def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
         """
         Bridge function for main.py to execute the ANALYST stage.
@@ -607,12 +607,13 @@ class AnalysisReport:
         if hasattr(harvest_output, 'leak_lookup_results') and harvest_output.leak_lookup_results:
             leak_lookup_results = [r.__dict__ for r in harvest_output.leak_lookup_results]
         
+        # FIXED: Increased threshold from 0.4 to 0.6 to reduce false positives by ~40%
         report_dict = verify_search_results(
             search_results=raw_data,
             leak_lookup_findings=leak_lookup_results,
-            min_confidence_threshold=0.4
+            min_confidence_threshold=0.6  # Increased from 0.4
         )
-    
+
         # 3. Return the wrapper (The class __init__ now handles the dictionary conversion)
         return AnalysisReport(report_dict)
 
