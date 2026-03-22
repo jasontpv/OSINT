@@ -477,4 +477,4 @@ if __name__ == "__main__":
     summary = db.get_verified_facts_summary(test_ticket)
     logger.info(f"✓ Facts summary: {summary}")
 
-    print("\n✅ All DatabaseManager tests passed!")
+    print("\n[OK] All DatabaseManager tests passed!")

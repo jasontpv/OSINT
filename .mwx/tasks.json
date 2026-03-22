@@ -3,22 +3,36 @@
     "id": "task-13",
     "title": "Add missing detect_consensus function to osint_analyst_stage.py",
     "description": "",
-    "status": "in-progress",
+    "status": "completed",
     "priority": "high",
     "tags": [],
     "createdAt": "2026-03-20T08:21:25.784Z",
-    "updatedAt": "2026-03-21T04:20:55.220Z",
-    "notes": []
+    "updatedAt": "2026-03-21T13:00:15.960Z",
+    "notes": [],
+    "completedAt": "2026-03-21T13:00:15.960Z"
   },
   {
     "id": "task-15",
     "title": "Create database_manager.py with DatabaseManager class and schema",
     "description": "",
-    "status": "in-progress",
+    "status": "completed",
     "priority": "high",
     "tags": [],
     "createdAt": "2026-03-21T10:09:01.343Z",
-    "updatedAt": "2026-03-21T10:09:15.742Z",
-    "notes": []
+    "updatedAt": "2026-03-21T13:00:19.001Z",
+    "notes": [],
+    "completedAt": "2026-03-21T13:00:19.001Z"
+  },
+  {
+    "id": "task-16",
+    "title": "Review all Python files for logic breaks, recursion, and redundancy",
+    "description": "",
+    "status": "completed",
+    "priority": "high",
+    "tags": [],
+    "createdAt": "2026-03-22T00:23:14.210Z",
+    "updatedAt": "2026-03-22T00:23:16.993Z",
+    "notes": [],
+    "completedAt": "2026-03-22T00:23:16.993Z"
   }
 ]
