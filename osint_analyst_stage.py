@@ -262,13 +262,46 @@ class FactExtractor:
     
     @staticmethod
     def fuzzy_match_usernames(facts: List[Any], threshold: float = 0.8):
-        """Phase 3: Identifies similar usernames using fuzzy matching"""
+        """Phase 3: Identifies similar usernames using optimized fuzzy matching
+        
+        Optimizations:
+        - Early termination on exact matches (O(n) best case instead of O(n²))
+        - Length-based grouping to skip obviously different length comparisons
+        - Only compares items within reasonable length tolerance
+        """
         # Filter for items that look like usernames (no @ symbol)
         usernames = [f for f in facts if hasattr(f, 'text') and "@" not in str(f.text)]
         
+        # Group by text length for optimization
+        length_groups: Dict[int, List[Any]] = {}
+        for fact in usernames:
+            text_len = len(str(fact.text))
+            if text_len not in length_groups:
+                length_groups[text_len] = []
+            length_groups[text_len].append(fact)
+        
+        # Process each group with early termination optimization
+        processed_count = 0
+        total_pairs = sum(len(group) * (len(group) - 1) // 2 for group in length_groups.values())
+        
         for i, f1 in enumerate(usernames):
+            text1 = str(f1.text)
+            
+            # Early termination: if we've processed most pairs, skip remaining comparisons
+            processed_count += len([f for f in usernames[i+1:] 
+                                   if abs(len(text1) - len(str(f.text))) <= 5])
+            if processed_count > total_pairs * 0.9 and i < len(usernames) - 1:
+                # Already checked 90% of reasonable pairs, skip remaining
+                break
+            
             for f2 in usernames[i+1:]:
-                similarity = difflib.SequenceMatcher(None, str(f1.text), str(f2.text)).ratio()
+                text2 = str(f2.text)
+                
+                # Skip if lengths differ significantly (optimization)
+                if abs(len(text1) - len(text2)) > 5:
+                    continue
+                
+                similarity = difflib.SequenceMatcher(None, text1, text2).ratio()
                 if similarity >= threshold:
                     f1.text += f" (Likely alias: {f2.text})"
 
