@@ -260,7 +260,8 @@ class FactExtractor:
         
         return facts
     
-    def fuzzy_match_usernames(self, facts: List[Any], threshold: float = 0.8):
+    @staticmethod
+    def fuzzy_match_usernames(facts: List[Any], threshold: float = 0.8):
         """Phase 3: Identifies similar usernames using fuzzy matching"""
         # Filter for items that look like usernames (no @ symbol)
         usernames = [f for f in facts if hasattr(f, 'text') and "@" not in str(f.text)]
@@ -271,7 +272,8 @@ class FactExtractor:
                 if similarity >= threshold:
                     f1.text += f" (Likely alias: {f2.text})"
 
-    def apply_confidence_decay(self, fact: Any):
+    @staticmethod
+    def apply_confidence_decay(fact: Any):
         """Phase 3: Reduces confidence for older data (5% per year)"""
         current_year = datetime.now().year
         
@@ -535,6 +537,7 @@ class AnalysisReport:
             for f in raw_facts
         ]
 
+    @staticmethod
     def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
         """
         Bridge function for main.py to execute the ANALYST stage.
@@ -554,21 +557,26 @@ class AnalysisReport:
         
         # 1. Extract the raw results from the harvest tickets
         raw_data = []
-        for result in harvest_output.search_results:
-            # Check if the result has the raw data we need
-            data = getattr(result, 'results_raw', None)
-            
-            if data:
-                # Apply privacy filtering based on mode
-                if privacy_mode == 'private':
-                    data = _apply_privacy_filter(data)
+        if hasattr(harvest_output, 'search_results') and harvest_output.search_results:
+            for result in harvest_output.search_results:
+                # Check if the result has the raw data we need
+                data = getattr(result, 'results_raw', None)
                 
-                raw_data.append(data)
+                if data:
+                    # Apply privacy filtering based on mode
+                    if privacy_mode == 'private':
+                        data = _apply_privacy_filter(data)
+                    
+                    raw_data.append(data)
 
-         # 2. Run the forensic verification
+        # 2. Run the forensic verification
+        leak_lookup_results = []
+        if hasattr(harvest_output, 'leak_lookup_results') and harvest_output.leak_lookup_results:
+            leak_lookup_results = [r.__dict__ for r in harvest_output.leak_lookup_results]
+        
         report_dict = verify_search_results(
             search_results=raw_data,
-            leak_lookup_findings=[r.__dict__ for r in harvest_output.leak_lookup_results],
+            leak_lookup_findings=leak_lookup_results,
             min_confidence_threshold=0.4
         )
     

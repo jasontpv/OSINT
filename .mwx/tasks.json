@@ -39,23 +39,25 @@
     "id": "task-17",
     "title": "Fix critical syntax and logic errors in osint_cli_wrapper.py",
     "description": "Fix syntax errors in osint_cli_wrapper.py (duplicate decorators, missing return statements)",
-    "status": "in-progress",
+    "status": "completed",
     "priority": "critical",
     "tags": [],
     "createdAt": "2026-03-22T00:32:29.893Z",
-    "updatedAt": "2026-03-22T00:34:04.825Z",
-    "notes": []
+    "updatedAt": "2026-03-22T00:39:23.613Z",
+    "notes": [],
+    "completedAt": "2026-03-22T00:39:23.613Z"
   },
   {
     "id": "task-18",
     "title": "Fix critical errors in analysis_report.py",
     "description": "Fix missing return statements, static method decorator issues, data flow mismatches, and hardcoded variables in analysis_report.py",
-    "status": "not-started",
+    "status": "completed",
     "priority": "critical",
     "tags": [],
     "createdAt": "2026-03-22T00:32:32.908Z",
-    "updatedAt": "2026-03-22T00:32:32.908Z",
-    "notes": []
+    "updatedAt": "2026-03-22T00:39:26.094Z",
+    "notes": [],
+    "completedAt": "2026-03-22T00:39:26.094Z"
   },
   {
     "id": "task-19",
