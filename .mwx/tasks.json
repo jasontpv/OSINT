@@ -63,33 +63,36 @@
     "id": "task-19",
     "title": "Fix high severity issues in data_pipeline.py",
     "description": "Add thread safety fixes, path traversal validation, error handling for API keys, and fix race conditions in data_pipeline.py",
-    "status": "in-progress",
+    "status": "completed",
     "priority": "high",
     "tags": [],
     "createdAt": "2026-03-22T00:32:36.154Z",
-    "updatedAt": "2026-03-22T00:42:29.797Z",
-    "notes": []
+    "updatedAt": "2026-03-22T00:47:58.489Z",
+    "notes": [],
+    "completedAt": "2026-03-22T00:47:58.489Z"
   },
   {
     "id": "task-20",
     "title": "Fix high severity issues in utils_helpers.py",
     "description": "Fix connection pool lock contention, threaded output capture, and privacy filtering inconsistencies in utils_helpers.py",
-    "status": "not-started",
+    "status": "completed",
     "priority": "high",
     "tags": [],
     "createdAt": "2026-03-22T00:32:39.135Z",
-    "updatedAt": "2026-03-22T00:32:39.135Z",
-    "notes": []
+    "updatedAt": "2026-03-22T00:52:51.838Z",
+    "notes": [],
+    "completedAt": "2026-03-22T00:52:51.838Z"
   },
   {
     "id": "task-21",
     "title": "Fix redundancy issues across codebase",
     "description": "Remove redundant singleton patterns, duplicate output capture logic, and fix hardcoded API endpoints across all files",
-    "status": "not-started",
+    "status": "completed",
     "priority": "medium",
     "tags": [],
     "createdAt": "2026-03-22T00:32:42.114Z",
-    "updatedAt": "2026-03-22T00:32:42.114Z",
-    "notes": []
+    "updatedAt": "2026-03-22T00:59:14.821Z",
+    "notes": [],
+    "completedAt": "2026-03-22T00:59:14.821Z"
   }
 ]
