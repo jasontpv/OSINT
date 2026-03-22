@@ -617,6 +617,9 @@ class AnalysisReport:
             f.__dict__ if hasattr(f, '__dict__') else f 
             for f in raw_facts
         ]
+        # Additional attributes expected by tests
+        self.verified_entities = report_dict.get('verified_entities', [])
+        self.conflicts = report_dict.get('conflicts', [])
 @staticmethod
 def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
         """

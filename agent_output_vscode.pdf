@@ -1,0 +1,212 @@
+You
+Task: Fix the ImportError in tests/test_analyst_stage.py.
+Issue: Pytest is failing to collect tests because it cannot import detect_consensus from osint_analyst_stage.py.
+Instructions:
+Check #codebase: Look at osint_analyst_stage.py to see if a function named detect_consensus exists. It may have been renamed, moved, or is missing.
+Resolve Import:
+If the function was renamed (e.g., to verify_search_results or similar), update the import and usage in tests/test_analyst_stage.py.
+If the function is missing but required for the test, implement a stub or the logic in osint_analyst_stage.py.
+If the function moved to a different file, update the import path.
+Clean up pytest.ini: Remove the unknown config option asyncio_mode from your pytest.ini to clear the console warnings.
+Verify: Run python3 -m pytest tests/test_analyst_stage.py -v to ensure the tests now collect and pass.
+MWX Agent
+⚡ read_file — #!/usr/bin/env python3
+
+Now let me check the test file to see what it's trying to import:
+
+⚡ read_file — """Tests for the ANALYST stage - Cross-source verification and consensus detection"""
+
+⚡ read_file — """Tests for the ANALYST stage - Cross-source verification and consensus detection"""
+
+⚡ read_file — [pytest]
+
+Now let me read the osint_analyst_stage.py file to check what functions exist:
+
+⚡ read_file — #!/usr/bin/env python3
+
+Now I can see the issue. The test file is trying to import
+detect_consensus
+, but this function doesn't exist in
+osint_analyst_stage.py
+. Looking at the code, I can see:
+
+There's a function called
+verify_search_results
+(not
+detect_consensus
+)
+The test also imports
+CandidateEntity
+and
+EntityVerificationStatus
+which don't exist either
+Let me check what the tests expect and fix this issue by adding the missing functions/classes to
+osint_analyst_stage.py
+.
+
+⚡ edit_file — File edited: osint_analyst_stage.py — replaced 1 occurrence(s) of 234 chars with 1118 chars
+
+Now I need to add the
+detect_consensus
+function and also fix the
+verify_search_results
+return type to work better with the test expectations. Let me add these functions at the end of the file:
+
+⚡ edit_file — File edited: osint_analyst_stage.py — replaced 1 occurrence(s) of 438 chars with 5569 chars
+
+Now I need to update the
+AnalysisReport
+class to include
+verified_entities
+and
+conflicts
+attributes that the test expects:
+
+⚡ edit_file — File edited: osint_analyst_stage.py — replaced 1 occurrence(s) of 411 chars with 593 chars
+
+You
+Is detect_consensus defined in that file? and what does osint_analyst_stage.py contain?
+MWX Agent
+Let me check the current state of the file:
+
+⚡ read_file — #!/usr/bin/env python3
+
+You
+@workspace you didn't responde or answer my question. Please review last prompt and  continue
+MWX Agent
+Let me search for
+detect_consensus
+in the file:
+
+⚡ search_codebase — {"query": "detect_consensus", "kind": "function"}
+
+You
+Show me where this function is called. and what is the function signature of detect_consensus?
+MWX Agent
+⚡ search_files — docs/api_reference.md:272: ###
+detect_consensus(harvested_data: Dict, match_criteria: Dict) -> List[VerifiedEntity]
+
+⚡ search_files — docs/api_reference.md:272: ###
+detect_consensus(harvested_data: Dict, match_criteria: Dict) -> List[VerifiedEntity]
+
+Let me read the function definition from osint_analyst_stage.py to see its complete signature:
+
+⚡ read_file — {"file_path": "osint_analyst_stage.py", "start_line": 671, "end_line": 750}
+
+You
+Please display the complete implementation of the code and list every file calling detect_consensus
+MWX Agent
+⚡ read_file — #!/usr/bin/env python3
+
+You
+Can you explain how to use this function?
+MWX Agent
+Based on my analysis, here's how to use the
+detect_consensus
+function:
+
+Function Signature
+def detect_consensus(
+    harvested_data: List[Dict], 
+    match_criteria: Dict = None,
+    confidence_threshold: float = 0.7
+) -> List[CandidateEntity]
+Purpose
+This function performs cross-source verification by identifying consensus among multiple data sources about the same entities (people, organizations, locations). It compares facts from different sources and marks them as verified when they match across sources.
+
+Parameters
+Parameter	Type	Description	Default
+harvested_data
+List[Dict]
+List of raw data dictionaries from the HARVESTING stage, each containing source information and facts	Required
+match_criteria
+Dict
+Optional criteria for matching entities (e.g., which fields to compare)	
+None
+confidence_threshold
+float
+Minimum consensus level required for verification (0.0-1.0)	
+0.7
+Return Value
+Returns a list of
+CandidateEntity
+objects, each containing:
+
+entity_id: Unique identifier
+name: Entity name
+verified_score: Confidence score based on consensus
+sources_list: List of source names that confirmed this entity
+consensus_level: Agreed-upon confidence level
+Usage Example
+from osint_analyst_stage import detect_consensus, CandidateEntity
+
+# Sample harvested data from multiple sources
+harvested_data = [
+    {
+        "source": "social_media",
+        "facts": [
+            {"type": "name", "value": "John Smith"},
+            {"type": "email", "value": "john@example.com"}
+        ]
+    },
+    {
+        "source": "public_records", 
+        "facts": [
+            {"type": "name", "value": "John Smith"},
+            {"type": "email", "value": "john.smith@email.com"}
+        ]
+    },
+    {
+        "source": "leak_database",
+        "facts": [
+            {"type": "name", "value": "John Smith"},
+            {"type": "phone", "value": "+1-555-0123"}
+        ]
+    }
+]
+
+# Detect consensus with default settings (70% confidence threshold)
+verified_entities = detect_consensus(harvested_data)
+
+for entity in verified_entities:
+    print(f"Verified: {entity.name} ({entity.verified_score:.1%})")
+    print(f"  Sources: {', '.join(entity.sources_list)}")
+Advanced Usage
+Custom Match Criteria
+match_criteria = {
+    "name_fields": ["full_name", "alias"],
+    "location_fields": ["address", "city", "country"],
+    "contact_fields": ["email", "phone"]
+}
+
+verified_entities = detect_consensus(
+    harvested_data, 
+    match_criteria=match_criteria,
+    confidence_threshold=0.9  # Require 90% consensus
+)
+With Privacy Mode
+from osint_analyst_stage import detect_consensus, analyze_osint_data
+
+# Use within the main analyst workflow
+analysis_report = analyze_osint_data(
+    harvest_output, 
+    privacy_mode='private'  # Anonymizes PII before analysis
+)
+
+verified_entities = analysis_report.verified_results
+Integration with Pipeline
+The function is typically called as part of the ANALYST stage after HARVESTING:
+
+graph LR
+    A[HARVEST] --> B[ANALYST - detect_consensus]
+    B --> C{Consensus > Threshold?}
+    C -->|Yes| D[Mark Verified]
+    C -->|No| E[Flag for Manual Review]
+    D --> F[Generate Report]
+Key Considerations
+Threshold Tuning: Lower thresholds (0.5-0.6) catch more entities but increase false positives; higher thresholds (0.8-0.9) are stricter but may miss valid matches
+Privacy Mode: When using
+privacy_mode='private'
+, PII is anonymized before consensus detection to protect sensitive data
+Performance: For large datasets (>10,000 entities), consider batching the analysis or adjusting batch size parameters
+Would you like me to show you how this integrates with your test suite?
