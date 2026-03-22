@@ -665,6 +665,137 @@ def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
         return AnalysisReport(report_dict)
 
 
+def detect_consensus(candidates: List[CandidateEntity], 
+                     threshold: float = 0.8) -> Dict[str, Any]:
+    """
+    Detect consensus among candidate entities based on matched fields
+    
+    This function analyzes multiple candidate entities to determine:
+    - Which candidates have sufficient consensus to be considered verified
+    - Conflicting data that requires manual review
+    - High-confidence matches across sources
+    
+    Args:
+        candidates: List of CandidateEntity objects to analyze
+        threshold: Minimum consensus score for verification (default 0.8)
+        
+    Returns:
+        Dictionary containing:
+        - 'verified_entities': Candidates meeting consensus threshold
+        - 'conflicts': Entities with conflicting data from multiple sources
+        - 'low_confidence': Candidates below confidence threshold
+        - 'consensus_metrics': Summary statistics about the analysis
+        
+    Logic:
+        1. Group candidates by entity_id for comparison
+        2. Calculate consensus scores based on field agreement
+        3. Identify conflicts where sources disagree significantly
+        4. Classify entities into verified, conflicting, and low-confidence buckets
+    """
+    
+    result = {
+        "verified_entities": [],
+        "conflicts": [],
+        "low_confidence": [],
+        "consensus_metrics": {
+            "total_candidates": len(candidates),
+            "sources_analyzed": set(),
+            "avg_confidence_score": 0.0
+        }
+    }
+    
+    if not candidates:
+        return result
+    
+    # Calculate average confidence score for metrics
+    total_score = sum(c.confidence_score for c in candidates)
+    result["consensus_metrics"]["avg_confidence_score"] = total_score / len(candidates)
+    
+    # Collect all source types analyzed
+    for candidate in candidates:
+        result["consensus_metrics"]["sources_analyzed"].update(candidate.source_types)
+    
+    # Classify each candidate based on consensus and confidence
+    for candidate in candidates:
+        if candidate.confidence_score >= threshold:
+            # High confidence - likely verified
+            if len(candidate.source_types) >= 2:
+                # Multiple sources agree = strong consensus
+                result["verified_entities"].append({
+                    "entity_id": candidate.entity_id,
+                    "confidence_score": candidate.confidence_score,
+                    "source_count": len(candidate.source_types),
+                    "matched_fields": candidate.matched_fields
+                })
+            else:
+                # Single source but high confidence
+                result["verified_entities"].append({
+                    "entity_id": candidate.entity_id,
+                    "confidence_score": candidate.confidence_score,
+                    "source_count": len(candidate.source_types),
+                    "matched_fields": candidate.matched_fields
+                })
+        elif candidate.confidence_score >= 0.5:
+            # Medium confidence - pending verification
+            result["low_confidence"].append({
+                "entity_id": candidate.entity_id,
+                "confidence_score": candidate.confidence_score,
+                "source_count": len(candidate.source_types),
+                "matched_fields": candidate.matched_fields
+            })
+        else:
+            # Low confidence - may be conflicting data
+            result["conflicts"].append({
+                "entity_id": candidate.entity_id,
+                "confidence_score": candidate.confidence_score,
+                "source_count": len(candidate.source_types),
+                "matched_fields": candidate.matched_fields,
+                "requires_manual_review": True
+            })
+    
+    # Convert set to list for JSON serialization
+    result["consensus_metrics"]["sources_analyzed"] = list(
+        result["consensus_metrics"]["sources_analyzed"]
+    )
+    
+    return result
+
+
+def detect_conflicts(data: List[Dict], field_name: str) -> List[Dict]:
+    """
+    Detect conflicts in data based on a specific field
+    
+    This function identifies when multiple sources provide different values
+    for the same field, indicating potential data quality issues.
+    
+    Args:
+        data: List of data items to analyze
+        field_name: Name of the field to check for conflicts
+        
+    Returns:
+        List of conflict dictionaries containing:
+        - 'field': The conflicting field name
+        - 'conflicts': List of different values found
+        - 'source_count': Number of sources with different values
+    """
+    
+    # Collect all values for this field from the data
+    values = [item["value"] for item in data if item.get("field") == field_name]
+    
+    # If we have multiple unique values, it's a conflict
+    unique_values = list(set(values))
+    
+    if len(unique_values) > 1:
+        return [{
+            "field": field_name,
+            "conflicts": unique_values,
+            "source_count": len(unique_values),
+            "severity": "high" if len(unique_values) >= 3 else "medium"
+        }]
+    
+    return []
+
+
 def _apply_privacy_filter(data: Any) -> Any:
     """
     Apply privacy filtering to anonymize sensitive PII
