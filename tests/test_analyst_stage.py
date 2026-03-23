@@ -150,7 +150,7 @@ class TestAnalystStage:
         
         report = await analyze_osint_data(
             harvest_output=mock_harvest_output,
-            match_criteria={"required_fields": ["name"]}
+            privacy_mode='public'
         )
         
         # Should have few or no verified entities due to lack of data
