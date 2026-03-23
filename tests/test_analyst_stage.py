@@ -156,7 +156,6 @@ class TestAnalystStage:
         
         # Should have few or no verified entities due to lack of data
         assert len(report.verified_entities) <= 1
-        # May populate manual review queue for further investigation
 
 
 class MockHarvestOutput:
@@ -167,16 +166,3 @@ class MockHarvestOutput:
         self.total_processed = total_processed
         self.successful = successful  
         self.failed = failed
-
-
-def detect_conflicts(data: list, field_name: str) -> list:
-    """Helper function to detect conflicts in test data"""
-    
-    values = [item["value"] for item in data if item.get("field") == field_name]
-    
-    # If we have multiple different values for same field, it's a conflict
-    unique_values = set(values)
-    if len(unique_values) > 1:
-        return [{"field": field_name, "conflicts": list(unique_values)}]
-    
-    return []
