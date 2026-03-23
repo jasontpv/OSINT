@@ -353,14 +353,14 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT fact_type, COUNT(*) as count
+                    SELECT type, COUNT(*) as count
                     FROM verified_facts
                     WHERE ticket_id = ?
-                    GROUP BY fact_type
+                    GROUP BY type
                 ''', (ticket_id,))
 
                 rows = cursor.fetchall()
-                return {row['fact_type']: row['count'] for row in rows}
+                return {row['type']: row['count'] for row in rows}
 
         except sqlite3.Error as e:
             logger.error(f"Failed to get facts summary for ticket {ticket_id}: {e}")
