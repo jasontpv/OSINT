@@ -207,7 +207,7 @@ class DatabaseManager:
             logger.error(f"Database connection test failed: {e}")
             return False
 
-    def insert_raw_harvest(self, ticket_id: str, source: str, raw_content: str) -> bool:
+    def insert_raw_harvest(self, ticket_id: str, source: str, results_raw: str) -> bool:
         """Insert or update a raw harvest record (upsert logic).
 
         Uses INSERT OR REPLACE to handle duplicates - if the same tool
@@ -216,7 +216,7 @@ class DatabaseManager:
         Args:
             ticket_id: The ticket/recon identifier (e.g., "recon_f4f007")
             source: Source of the harvested data (tool name like 'shodan', 'hunter')
-            raw_content: The actual harvested content as string
+            results_raw: The actual harvested content as string/JSON
 
         Returns:
             True if insertion successful, False otherwise.
@@ -227,9 +227,9 @@ class DatabaseManager:
 
                 # Use INSERT OR REPLACE for upsert behavior (prevents duplicates)
                 cursor.execute('''
-                    INSERT OR REPLACE INTO raw_harvest (ticket_id, source, raw_content)
+                    INSERT OR REPLACE INTO raw_harvest (ticket_id, source, results_raw)
                     VALUES (?, ?, ?)
-                ''', (ticket_id, source, raw_content))
+                ''', (ticket_id, source, results_raw))
 
                 conn.commit()
                 logger.debug(f"Inserted/updated raw harvest: ticket={ticket_id}, source={source}")
