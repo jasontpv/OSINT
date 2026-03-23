@@ -255,7 +255,7 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, ticket_id, source, raw_content, timestamp
+                    SELECT id, ticket_id, source, results_raw, timestamp
                     FROM raw_harvest
                     WHERE ticket_id = ?
                     ORDER BY timestamp DESC
