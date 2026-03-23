@@ -162,3 +162,51 @@ class MockHarvestOutput:
         self.total_processed = total_processed
         self.successful = successful  
         self.failed = failed
+
+
+class MockAnalysisReport:
+    """Mock AnalysisReport for testing verify_search_results function"""
+    
+    def __init__(self):
+        self.verified_entities = []  # List of verified entities (empty initially)
+        self.conflicts = []          # List of conflicts detected (empty initially)
+        self.facts = []              # List of extracted facts (empty initially)
+        self.target_name = "Test Target"
+
+
+# Patch analyze_osint_data to return a properly structured mock report
+original_analyze_osint_data = None
+
+def patched_analyze_osint_data(harvest_output, privacy_mode='public'):
+    """Patched version that returns a fully-featured mock_report"""
+    mock_report = MockAnalysisReport()
+    
+    # Set up the report with some sample data based on harvest output
+    if harvest_output and hasattr(harvest_output, 'search_results'):
+        search_count = len(harvest_output.search_results) if harvest_output.search_results else 0
+        
+        # Create verified entities based on successful searches
+        for i in range(min(search_count, 2)):
+            mock_report.verified_entities.append({
+                "entity_id": f"entity_{i}",
+                "confidence_score": 0.85,
+                "source_types": ["linkedin_profile", "google_search"],
+                "matched_fields": {"name": "Test User"}
+            })
+        
+        # Create conflicts if there are multiple search results with different data
+        if search_count >= 2:
+            mock_report.conflicts.append({
+                "field": "location",
+                "conflicts": ["San Francisco", "New York"],
+                "source_count": 2,
+                "severity": "medium"
+            })
+    
+    return mock_report
+
+
+# Apply the patch before tests run
+import osint_analyst_stage
+original_analyze_osint_data = osint_analyst_stage.analyze_osint_data
+osint_analyst_stage.analyze_osint_data = patched_analyze_osint_data
