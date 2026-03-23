@@ -325,7 +325,7 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, ticket_id, fact_type, value, confidence, source_url, description, timestamp
+                    SELECT id, ticket_id, type, value, confidence, sources, description, timestamp
                     FROM verified_facts
                     WHERE ticket_id = ?
                     ORDER BY confidence DESC, timestamp DESC
