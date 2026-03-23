@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 from osint_analyst_stage import (
     analyze_osint_data, 
     AnalysisReport,
-    detect_consensus,
+    verify_search_results,
     CandidateEntity,
     EntityVerificationStatus
 )
