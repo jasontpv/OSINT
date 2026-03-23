@@ -162,13 +162,13 @@ class DatabaseManager:
                     CREATE TABLE IF NOT EXISTS verified_facts (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         ticket_id TEXT NOT NULL,
-                        fact_type TEXT NOT NULL,
+                        type TEXT NOT NULL,
                         value TEXT NOT NULL,
                         confidence REAL DEFAULT 0.0,
-                        source_url TEXT,
+                        sources TEXT,
                         description TEXT,
                         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(ticket_id, fact_type, value)
+                        UNIQUE(ticket_id, type, value)
                     )
                 ''')
 
