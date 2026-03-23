@@ -66,7 +66,7 @@ class DatabaseManager:
         """
         with cls._init_lock:  # Prevent race condition during initialization
             if cls._instance is None or (db_path and cls._instance.db_path != db_path):
-                cls._instance = cls(db_path or "osint_pipeline.db")
+                cls._instance = cls(db_path or "osint.db")
             return cls._instance
 
     @contextmanager
