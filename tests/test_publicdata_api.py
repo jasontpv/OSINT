@@ -20,15 +20,12 @@ To run integration tests (requires valid test credentials):
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
-from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
-from aiohttp import ClientError, ClientTimeout
 
 # Import modules to test
 from osint_publicdata_api import (
