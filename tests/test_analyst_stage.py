@@ -1,11 +1,10 @@
 """Tests for the ANALYST stage - Cross-source verification and consensus detection"""
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import MagicMock
 from osint_analyst_stage import (
     analyze_osint_data, 
     AnalysisReport,
-    verify_search_results,
     CandidateEntity,
     EntityVerificationStatus,
     detect_conflicts
@@ -15,8 +14,7 @@ from osint_analyst_stage import (
 class TestAnalystStage:
     """Test suite for data verification and analysis"""
     
-    @pytest.mark.asyncio
-    async def test_analysis_with_consistent_data(self):
+    def test_analysis_with_consistent_data(self):
         """Test analysis when sources agree on key facts"""
         
         mock_harvest_output = MockHarvestOutput(
@@ -47,7 +45,7 @@ class TestAnalystStage:
             failed=0
         )
         
-        report = await analyze_osint_data(
+        report = analyze_osint_data(
             harvest_output=mock_harvest_output,
             privacy_mode='public'
         )
@@ -56,8 +54,7 @@ class TestAnalystStage:
         # Should detect consensus on city and company
         assert len(report.verified_entities) >= 1
         
-    @pytest.mark.asyncio  
-    async def test_analysis_with_conflicting_data(self):
+    def test_analysis_with_conflicting_data(self):
         """Test analysis when sources contradict each other"""
         
         mock_harvest_output = MockHarvestOutput(
@@ -88,7 +85,7 @@ class TestAnalystStage:
             failed=0
         )
         
-        report = await analyze_osint_data(
+        report = analyze_osint_data(
             harvest_output=mock_harvest_output,
             privacy_mode='public'
         )
@@ -131,8 +128,7 @@ class TestAnalystStage:
         
         assert len(conflicts) >= 1
         
-    @pytest.mark.asyncio
-    async def test_manual_review_queue_population(self):
+    def test_manual_review_queue_population(self):
         """Test that low-confidence items go to manual review queue"""
         
         mock_harvest_output = MockHarvestOutput(
@@ -149,7 +145,7 @@ class TestAnalystStage:
             failed=0
         )
         
-        report = await analyze_osint_data(
+        report = analyze_osint_data(
             harvest_output=mock_harvest_output,
             privacy_mode='public'
         )
