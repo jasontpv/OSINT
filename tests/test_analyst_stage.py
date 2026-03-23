@@ -1,13 +1,14 @@
 """Tests for the ANALYST stage - Cross-source verification and consensus detection"""
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 from osint_analyst_stage import (
     analyze_osint_data, 
     AnalysisReport,
     verify_search_results,
     CandidateEntity,
-    EntityVerificationStatus
+    EntityVerificationStatus,
+    detect_conflicts
 )
 
 
