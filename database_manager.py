@@ -46,7 +46,7 @@ class DatabaseManager:
                      Can be set via environment variable OSINT_DB_PATH for flexibility.
         """
         # Allow environment variable override
-        self.db_path = db_path or os.environ.get("OSINT_DB_PATH", "osint_pipeline.db")
+        self.db_path = db_path or os.environ.get("OSINT_DB_PATH", "osint.db")
         self._connection_pool: List[sqlite3.Connection] = []
         self._lock = threading.Lock()  # Protects connection pool operations
         self._initialized = False
