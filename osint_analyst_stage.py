@@ -26,6 +26,27 @@ import difflib
 logger = logging.getLogger("osint_analyst")
 
 
+class EntityVerificationStatus:
+    """Enum-like class for entity verification statuses"""
+    
+    PENDING = "pending"
+    VERIFIED = "verified"
+    CONFLICTING = "conflicting"
+    LOW_CONFIDENCE = "low_confidence"
+    
+    @classmethod
+    def from_score(cls, score: float) -> str:
+        """Determine status based on confidence score"""
+        if score >= 0.8:
+            return cls.VERIFIED
+        elif score >= 0.5:
+            return cls.PENDING
+        elif score < 0.3:
+            return cls.LOW_CONFIDENCE
+        else:
+            return cls.CONFLICTING
+
+
 @dataclass 
 class CandidateEntity:
     """Represents a candidate entity with consensus detection metadata"""
@@ -34,10 +55,7 @@ class CandidateEntity:
     source_types: List[str]
     matched_fields: Dict[str, Any]
     confidence_score: float
-    verification_status: "EntityVerificationStatus" = EntityVerificationStatus.PENDING
-
-
-class EntityVerificationStatus:
+    verification_status: str = "pending"
     """Enum-like class for entity verification statuses"""
     
     PENDING = "pending"
@@ -673,7 +691,7 @@ def detect_consensus(candidates: List[CandidateEntity],
     """
     Detect consensus among candidate entities based on matched fields
     
-    This function analyzes multiple candidate entities to determine:
+    Function analyzes multiple candidate entities to determine the following:
     - Which candidates have sufficient consensus to be considered verified
     - Conflicting data that requires manual review
     - High-confidence matches across sources
