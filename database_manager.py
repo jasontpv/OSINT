@@ -269,7 +269,7 @@ class DatabaseManager:
             return []
 
     def insert_verified_fact(self, ticket_id: str, fact_type: str, value: str,
-                           confidence: float = 0.0, source_url: Optional[str] = None,
+                           confidence: float = 0.0, sources: Optional[str] = None,
                            description: Optional[str] = None) -> bool:
         """Insert or update a verified fact record (upsert logic).
 
@@ -281,7 +281,7 @@ class DatabaseManager:
             fact_type: Type of the fact ("email", "ip_address", "domain", etc.)
             value: The actual fact value (e.g., "user@example.com")
             confidence: Confidence score between 0.0 and 1.0 from LLM analysis
-            source_url: Optional URL where this fact was found
+            sources: Optional source information for this fact
             description: Optional description or context about the fact
 
         Returns:
@@ -294,9 +294,9 @@ class DatabaseManager:
                 # Use INSERT OR REPLACE for upsert behavior (prevents duplicates)
                 cursor.execute('''
                     INSERT OR REPLACE INTO verified_facts
-                        (ticket_id, fact_type, value, confidence, source_url, description)
+                        (ticket_id, type, value, confidence, sources, description)
                     VALUES (?, ?, ?, ?, ?, ?)
-                ''', (ticket_id, fact_type, value, confidence, source_url, description))
+                ''', (ticket_id, fact_type, value, confidence, sources, description))
 
                 conn.commit()
                 logger.debug(f"Inserted/updated verified fact: ticket={ticket_id}, type={fact_type}")
