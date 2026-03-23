@@ -48,9 +48,7 @@ class TestAnalystStage:
         
         report = await analyze_osint_data(
             harvest_output=mock_harvest_output,
-            match_criteria={
-                "required_fields": ["city", "company"]
-            }
+            privacy_mode='public'
         )
         
         assert isinstance(report, AnalysisReport)
@@ -91,9 +89,7 @@ class TestAnalystStage:
         
         report = await analyze_osint_data(
             harvest_output=mock_harvest_output,
-            match_criteria={
-                "required_fields": ["city", "role"]
-            }
+            privacy_mode='public'
         )
         
         assert isinstance(report, AnalysisReport)
