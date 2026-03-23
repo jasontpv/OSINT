@@ -38,7 +38,7 @@ class DatabaseManager:
     _instance: Optional['DatabaseManager'] = None
     _init_lock = threading.Lock()  # Separate lock for thread-safe singleton initialization
 
-    def __init__(self, db_path: str = "osint_pipeline.db"):
+    def __init__(self, db_path: str = "osint.db"):
         """Initialize the database manager with connection pool setup.
 
         Args:
