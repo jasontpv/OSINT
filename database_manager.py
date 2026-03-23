@@ -145,9 +145,9 @@ class DatabaseManager:
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         ticket_id TEXT NOT NULL,
                         source TEXT NOT NULL,
-                        raw_content TEXT NOT NULL,
+                        results_raw TEXT NOT NULL,
                         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(ticket_id, source, raw_content)
+                        UNIQUE(ticket_id, source, results_raw)
                     )
                 ''')
 
