@@ -42,7 +42,7 @@ class DatabaseManager:
         """Initialize the database manager with connection pool setup.
 
         Args:
-            db_path: Path to SQLite database file. Defaults to osint_pipeline.db in current directory.
+            db_path: Path to SQLite database file. Defaults to osint.db in current directory.
                      Can be set via environment variable OSINT_DB_PATH for flexibility.
         """
         # Allow environment variable override
