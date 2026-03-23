@@ -13,10 +13,20 @@ from osint_analyst_stage import (
 
 class TestAnalystStage:
     """Test suite for data verification and analysis"""
-    
-    def test_analysis_with_consistent_data(self):
+
+    @pytest.fixture
+    def mock_report(self):
+        """Create a properly initialized mock AnalysisReport with all required attributes as empty lists"""
+        mock_report = MagicMock()
+        mock_report.verified_entities = []
+        mock_report.conflicts = []
+        mock_report.facts = []
+        mock_report.target_name = "Test Target"
+        return mock_report
+
+    def test_analysis_with_consistent_data(self, mock_report):
         """Test analysis when sources agree on key facts"""
-        
+
         mock_harvest_output = Mock()
         mock_harvest_output.search_results = [
             {
