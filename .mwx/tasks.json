@@ -132,5 +132,17 @@
     "createdAt": "2026-03-22T23:52:37.008Z",
     "updatedAt": "2026-03-22T23:52:37.008Z",
     "notes": []
+  },
+  {
+    "id": "task-25",
+    "title": "Clean up unnecessary project files and directories",
+    "description": "",
+    "status": "completed",
+    "priority": "medium",
+    "tags": [],
+    "createdAt": "2026-03-23T07:17:57.997Z",
+    "updatedAt": "2026-03-23T07:26:05.383Z",
+    "notes": [],
+    "completedAt": "2026-03-23T07:26:05.383Z"
   }
 ]

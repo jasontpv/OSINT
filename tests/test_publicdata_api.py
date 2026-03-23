@@ -59,14 +59,14 @@ class MockXMLResponse:
         xml_header = '<?xml version="1.0" encoding="UTF-8"?>'
         
         records_xml = ""
-        for i in range(num_records):
-            record_id = i + 1
+        for idx in range(num_records):
+            record_id = idx + 1
             records_xml += f'''
 <record>
     <field name="id">{record_id}</field>
     <field name="name">Test User {record_id}</field>
     <field name="email">user{record_id}@example.com</field>
-    <field name="phone">555-010{i}</field>
+    <field name="phone">555-010{idx}</field>
     <field name="address">123 Test St, City {record_id}, ST 12345</field>
     <field name="status">active</field>
 </record>'''
