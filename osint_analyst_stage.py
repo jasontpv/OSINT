@@ -22,8 +22,16 @@ from typing import Any, List, Dict, Optional, Union
 from datetime import datetime
 import re
 import difflib
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 logger = logging.getLogger("osint_analyst")
+
+# Import database manager at module level
+from database_manager import get_db_manager
 
 
 class EntityVerificationStatus:
