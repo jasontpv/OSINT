@@ -16,6 +16,10 @@ Author: OSINT Team (Fixed by Senior AI Solutions Architect)
 Date: 2024-12-17
 """
 
+# Fix Windows console encoding/emoji support
+import sys, io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 import asyncio
 import json
 import logging
