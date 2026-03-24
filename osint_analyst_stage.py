@@ -694,16 +694,41 @@ def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
         try:
             db_manager = get_db_manager()
             for fact in report_dict.get('verified_results', []):
-                db_manager.insert_verified_fact(
-                    ticket_id=harvest_output.ticket_id,
-                    type_=fact.get('type'),
-                    value=fact.get('value'),
-                    confidence=fact.get('confidence', 0.5),
-                    sources=str(fact.get('sources', [])),
-                    description=fact.get('description', '')
-                )
+                # Map fields from analyst output to DB schema
+                # Analyst uses 'text' but DB expects 'type' for fact category
+                # We'll use 'email' as default type since most facts are emails
+                
+                fact_type = fact.get('type', 'email')  # Use existing 'type' if present, else default
+                fact_value = fact.get('text', '')       # Analyst uses 'text' for the actual value
+                fact_confidence = fact.get('confidence_score', 
+                                           fact.get('confidence', 0.5))
+                fact_sources = str(fact.get('sources', []))
+                if not isinstance(fact_sources, str):
+                    fact_sources = str(list(fact_sources) if hasattr(fact_sources, '__iter__') else [])
+                
+                # Use description from metadata or text as fallback
+                description = fact.get('description', '')
+                if not description:
+                    # Extract meaningful description from other fields
+                    desc_parts = []
+                    if 'cross_references' in fact and fact['cross_references']:
+                        desc_parts.append(f"Cross-referenced with {len(fact['cross_references'])} sources")
+                    if isinstance(fact.get('metadata'), dict) and fact['metadata'].get('extraction_type'):
+                        desc_parts.append(f"Extracted via: {fact['metadata']['extraction_type']}")
+                    description = " | ".join(desc_parts) if desc_parts else ""
+                
+            db_manager.insert_verified_fact(
+                ticket_id=harvest_output.ticket_id,
+                fact_type=fact.get('type'),
+                value=fact.get('value'),
+                confidence=fact.get('confidence', 0.5),
+                sources=str(fact.get('sources', [])),
+                description=fact.get('description', '')
+            )
+            
+            logger.info(f"Successfully saved {len(report_dict.get('verified_results', []))} verified facts to database")
         except Exception as e:
-            logger.warning(f"Failed to save facts to database: {e}")
+            logger.error(f"Failed to save facts to database: {e}", exc_info=True)
 
         # 3. Return the wrapper (The class __init__ now handles the dictionary conversion)
         return AnalysisReport(report_dict)
