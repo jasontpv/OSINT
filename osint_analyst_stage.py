@@ -34,6 +34,22 @@ logger = logging.getLogger("osint_analyst")
 from database_manager import get_db_manager
 
 
+def _get_db_path() -> Optional[str]:
+    """Safely retrieve database path without causing runtime errors."""
+    try:
+        db_mgr = get_db_manager()
+        return db_mgr.db_path
+    except Exception:
+        logger.warning("Could not determine database path")
+        return None
+
+
+# Print database path after imports are available
+db_path = _get_db_path()
+if db_path:
+    print(f"Using database: {db_path}") 
+
+
 class EntityVerificationStatus:
     """Enum-like class for entity verification statuses"""
     
