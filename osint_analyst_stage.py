@@ -682,6 +682,21 @@ def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
             min_confidence_threshold=0.6  # Increased from 0.4
         )
 
+        # Save verified facts to the database
+        try:
+            db_manager = get_db_manager()
+            for fact in report_dict.get('verified_results', []):
+                db_manager.insert_verified_fact(
+                    ticket_id=harvest_output.ticket_id,
+                    type_=fact.get('type'),
+                    value=fact.get('value'),
+                    confidence=fact.get('confidence', 0.5),
+                    sources=str(fact.get('sources', [])),
+                    description=fact.get('description', '')
+                )
+        except Exception as e:
+            logger.warning(f"Failed to save facts to database: {e}")
+
         # 3. Return the wrapper (The class __init__ now handles the dictionary conversion)
         return AnalysisReport(report_dict)
 
