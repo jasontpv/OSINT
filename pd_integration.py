@@ -17,10 +17,22 @@ async def authenticate(session):
     """Return a bearer token (simple implementation)"""
     auth_url = f"{BASE_URL}/authenticate.php"
     data = {"username": USERNAME, "password": PASSWORD}
-    async with session.post(auth_url, data=data, timeout=30) as resp:
-        text = await resp.text()
-        # In the demo API the token is returned plain
-        return text.strip()
+    try:
+        async with session.post(auth_url, data=data, timeout=30) as resp:
+            if resp.status != 200:
+                print(f"[ERROR] Authentication failed with status {resp.status}")
+                return None
+            text = await resp.text()
+            token = text.strip()
+            # Validate token is reasonable length
+            if len(token) < 10:
+                print(f"[WARNING] Received suspiciously short token: '{token[:20]}...'")
+                return None
+            print(f"[DEBUG] Authentication successful. Token length: {len(token)}")
+            return token
+    except Exception as e:
+        print(f"[ERROR] Authentication error: {e}")
+        return None
 
 async def do_search(session, token):
     """Issue a search request and follow pagination until no more records."""
