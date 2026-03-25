@@ -25,7 +25,7 @@ import difflib
 import sys
 import os
 
-# Add parent directory to path for imports
+# Add parent directory to path for imports".t
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 logger = logging.getLogger("osint_analyst")
@@ -38,6 +38,7 @@ def _get_db_path() -> Optional[str]:
     """Safely retrieve database path without causing runtime errors."""
     try:
         db_mgr = get_db_manager()
+        db_mgr.initialize_tables()
         return db_mgr.db_path
     except Exception:
         logger.warning("Could not determine database path")
@@ -644,93 +645,95 @@ class AnalysisReport:
         # Additional attributes expected by tests
         self.verified_entities = report_dict.get('verified_entities', [])
         self.conflicts = report_dict.get('conflicts', [])
+
 @staticmethod
 def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
-        """
-        Bridge function for main.py to execute the ANALYST stage.
-        
-        This ensures proper data flow from HARVESTING to ANALYST stage.
-        
-        Args:
-            harvest_output: Output object from HARVESTING stage containing search_results
-                        and leak_lookup_results attributes
-            privacy_mode: Privacy processing mode ('public' or 'private')
-                        - 'public': Full data exposure for verification
-                        - 'private': Anonymizes sensitive PII before analysis
-        
-        Returns:
-            AnalysisReport object with verified results and confidence scores
-        """
-        
-        # 1. Extract the raw results from the harvest tickets
-        raw_data = []
-        if hasattr(harvest_output, 'search_results') and harvest_output.search_results:
-            for result in harvest_output.search_results:
-                # Check if the result has the raw data we need
-                data = getattr(result, 'results_raw', None)
-                
-                if data:
-                    # Apply privacy filtering based on mode
-                    if privacy_mode == 'private':
-                        data = _apply_privacy_filter(data)
-                    
-                    raw_data.append(data)
+    """
+    Bridge function for main.py to execute the ANALYST stage.
+    This ensures proper data flow from HARVESTING to ANALYST stage.
+    """
 
-        # 2. Run the forensic verification
-        leak_lookup_results = []
-        if hasattr(harvest_output, 'leak_lookup_results') and harvest_output.leak_lookup_results:
-            leak_lookup_results = [r.__dict__ for r in harvest_output.leak_lookup_results]
-        
-        # FIXED: Increased threshold from 0.4 to 0.6 to reduce false positives by ~40%
-        report_dict = verify_search_results(
-            search_results=raw_data,
-            leak_lookup_findings=leak_lookup_results,
-            min_confidence_threshold=0.6  # Increased from 0.4
-        )
+    # -----------------------------------------------------------------
+    # 1) Get a DatabaseManager (singleton) and make sure tables exist
+    # -----------------------------------------------------------------
+    db_manager = get_db_manager()
+    db_manager.initialize_tables()          # guarantees that `verified_facts` exists
 
-        # Save verified facts to the database
-        try:
-            db_manager = get_db_manager()
-            for fact in report_dict.get('verified_results', []):
-                # Map fields from analyst output to DB schema
-                # Analyst uses 'text' but DB expects 'type' for fact category
-                # We'll use 'email' as default type since most facts are emails
-                
-                fact_type = fact.get('type', 'email')  # Use existing 'type' if present, else default
-                fact_value = fact.get('text', '')       # Analyst uses 'text' for the actual value
-                fact_confidence = fact.get('confidence_score', 
-                                           fact.get('confidence', 0.5))
-                fact_sources = str(fact.get('sources', []))
-                if not isinstance(fact_sources, str):
-                    fact_sources = str(list(fact_sources) if hasattr(fact_sources, '__iter__') else [])
-                
-                # Use description from metadata or text as fallback
-                description = fact.get('description', '')
-                if not description:
-                    # Extract meaningful description from other fields
-                    desc_parts = []
-                    if 'cross_references' in fact and fact['cross_references']:
-                        desc_parts.append(f"Cross-referenced with {len(fact['cross_references'])} sources")
-                    if isinstance(fact.get('metadata'), dict) and fact['metadata'].get('extraction_type'):
-                        desc_parts.append(f"Extracted via: {fact['metadata']['extraction_type']}")
-                    description = " | ".join(desc_parts) if desc_parts else ""
-                
-            db_manager.insert_verified_fact(
+    # -----------------------------------------------------------------
+    # 2) Gather raw harvest data
+    # -----------------------------------------------------------------
+    raw_data = []
+    if hasattr(harvest_output, 'search_results') and harvest_output.search_results:
+        for result in harvest_output.search_results:
+            data = getattr(result, 'results_raw', None)
+            if data:
+                if privacy_mode == 'private':
+                    data = _apply_privacy_filter(data)
+                raw_data.append(data)
+
+    # -----------------------------------------------------------------
+    # 3) Run verification / cross‑reference
+    # -----------------------------------------------------------------
+    leak_lookup_results = []
+    if hasattr(harvest_output, 'leak_lookup_results') and harvest_output.leak_lookup_results:
+        leak_lookup_results = [r.__dict__ for r in harvest_output.leak_lookup_results]
+
+    report_dict = verify_search_results(
+        search_results=raw_data,
+        leak_lookup_findings=leak_lookup_results,
+        min_confidence_threshold=0.6
+    )
+
+    # -----------------------------------------------------------------
+    # 4) Insert every verified fact into the database
+    # -----------------------------------------------------------------
+    try:
+        fact_items = report_dict.get('verified_results', [])
+        print(f"Found {len(fact_items)} fact items to store")
+        print("report_dict keys:", list(report_dict.keys()))
+
+        for fact in fact_items:
+            # Map fields that `insert_verified_fact` expects
+            fact_type       = fact.get('type', 'email')
+            fact_value      = fact.get('text', '')
+            fact_confidence = fact.get('confidence_score',
+                                      fact.get('confidence', 0.5))
+            fact_sources    = str(fact.get('sources', []))
+            if not isinstance(fact_sources, str):
+                fact_sources = str(list(fact_sources) if hasattr(fact_sources, '__iter__') else [])
+
+            # Build a short description (use provided or create one)
+            description = fact.get('description', '')
+            if not description:
+                parts = []
+                if 'cross_references' in fact and fact['cross_references']:
+                    parts.append(f"Cross‑referred with {len(fact['cross_references'])} sources")
+                if isinstance(fact.get('metadata'), dict) and fact['metadata'].get('extraction_type'):
+                    parts.append(f"Extracted via: {fact['metadata']['extraction_type']}")
+                description = " | ".join(parts)
+
+            # Insert the record
+            success = db_manager.insert_verified_fact(
                 ticket_id=harvest_output.ticket_id,
-                fact_type=fact.get('type'),
-                value=fact.get('value'),
-                confidence=fact.get('confidence', 0.5),
-                sources=str(fact.get('sources', [])),
-                description=fact.get('description', '')
+                fact_type=fact_type,
+                value=fact_value,
+                confidence=fact_confidence,
+                sources=fact_sources,
+                description=description
             )
-            
-            logger.info(f"Successfully saved {len(report_dict.get('verified_results', []))} verified facts to database")
-        except Exception as e:
-            logger.error(f"Failed to save facts to database: {e}", exc_info=True)
+            if not success:
+                print(f"Insert failed for fact: {fact}")
 
-        # 3. Return the wrapper (The class __init__ now handles the dictionary conversion)
-        return AnalysisReport(report_dict)
+        print(f"Successfully saved {len(fact_items)} verified facts to database")
 
+    except Exception as e:
+        # Any unexpected error is logged – the pipeline will continue with a clean failure message
+        logging.exception("Failed to save facts to database")
+
+    # -----------------------------------------------------------------
+    # 5) Return the report wrapper
+    # -----------------------------------------------------------------
+    return AnalysisReport(report_dict)
 
 def detect_consensus(candidates: List[CandidateEntity], 
                      threshold: float = 0.8) -> Dict[str, Any]:
