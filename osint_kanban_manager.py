@@ -257,6 +257,8 @@ class PipelineConfig:
         self.wip_limits: Dict[str, int] = kwargs.get('wip_limits', {
             "RECON": 5, "HARVESTING": 10, "ANALYST": 5, "SCRIBE": 3
         })
+        self.tool_repos: Dict[str,str] = kwargs.get('tool_repos', {})
+        self.privacy_mode: str = kwargs.get('privacy_mode', 'hybrid')
         self.api_keys: Dict[str, str] = kwargs.get('api_keys', {})
         self.max_retries_per_ticket: int = kwargs.get('max_retries_per_ticket', 3)
         self.enable_circuit_breaker: bool = kwargs.get('enable_circuit_breaker', True)
@@ -423,7 +425,23 @@ class OSINTKanbanManager:
             }
             
             logger.info(f"✓ HARVESTING: Processed {ticket.ticket_id}, found {len(ticket.harvest_results.get('search_results', []))} search results")
-            
+
+            # Run CLI tool for domain/IP targets (non-fatal — enriches harvest data)
+            try:
+                from osint_cli_wrapper import CLICommandRunner
+                _cli_target_map = {
+                    "domain": "domain", "company": "domain", "ip_address": "ip_address",
+                }
+                cli_type = _cli_target_map.get(ticket.target_type, "domain")
+                cli_runner = CLICommandRunner(workspace_dir="./OSINT_WORKSPACE")
+                await cli_runner.execute_tool_for_target(
+                    cli_type,
+                    ticket.user_query,
+                    tool_repos=self.config.tool_repos,
+                )
+            except Exception as cli_err:
+                logger.warning(f"CLI tool execution skipped for {ticket.ticket_id}: {cli_err}")
+
         except Exception as e:
             logger.error(f"HARVESTING stage failed for {ticket.ticket_id}: {e}")
             ticket.increment_error("harvest_failure")
