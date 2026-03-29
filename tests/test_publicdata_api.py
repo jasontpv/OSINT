@@ -389,7 +389,7 @@ class TestAuthenticationFlow:
         """Create a mocked aiohttp session"""
         
         with patch('aiohttp.ClientSession') as mock_session_class:
-            mock_session = MagicMock(spec=aiohttp.ClientSession)
+            mock_session = MagicMock()  # BUGFIX: spec=aiohttp.ClientSession raises InvalidSpecError in Python 3.13
             mock_session_class.return_value = mock_session
             
             yield mock_session
@@ -492,7 +492,7 @@ class TestSearchExecution:
         """Create a mocked aiohttp session"""
         
         with patch('aiohttp.ClientSession') as mock_session_class:
-            mock_session = MagicMock(spec=aiohttp.ClientSession)
+            mock_session = MagicMock()  # BUGFIX: spec=aiohttp.ClientSession raises InvalidSpecError in Python 3.13
             mock_session_class.return_value = mock_session
             
             yield mock_session
@@ -640,7 +640,7 @@ class TestPagination:
         """Create a mocked aiohttp session"""
         
         with patch('aiohttp.ClientSession') as mock_session_class:
-            mock_session = MagicMock(spec=aiohttp.ClientSession)
+            mock_session = MagicMock()  # BUGFIX: spec=aiohttp.ClientSession raises InvalidSpecError in Python 3.13
             mock_session_class.return_value = mock_session
             
             yield mock_session

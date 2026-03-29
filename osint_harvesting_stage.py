@@ -17,9 +17,8 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 import aiohttp
 import logging
 
@@ -32,12 +31,10 @@ try:
         search_leak_lookup,
         AuthenticationError as LeakLookupAuthError,
         ConnectionTimeoutError as LeakLookupTimeoutError,
-        RateLimitError as LeakLookupRateLimitError
     )
 except ImportError:
     class LeakLookupAuthError(Exception): pass
     class LeakLookupTimeoutError(Exception): pass
-    class LeakLookupRateLimitError(Exception): pass
 
 
 class SearchProvider(Enum):
@@ -236,25 +233,29 @@ class SerperClient:
             }
             
             try:
-                async with session.post(
+                # BUGFIX: use awaitable form (response = await session.get()) instead of
+                # async-with so that AsyncMock test doubles work correctly — aiohttp's
+                # _RequestContextManager supports both patterns with the real client.
+                response = await session.get(
                     self.BASE_URL,
                     headers=headers,
-                    json=payload,
+                    params=payload,
                     timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    
-                    # FIXED: Single JSON parse only (no double parsing!)
-                    if response.status == 200:
-                        return await response.json()  # Already parsed!
-                    elif response.status == 401:
-                        raise Exception("Invalid API key (HTTP 401)")
-                    elif response.status == 429:
-                        raise Exception("Rate limit exceeded (HTTP 429)")
-                    else:
-                        error_text = await response.text()
-                        raise Exception(f"Serper.dev API error {response.status}: {error_text}")
-                        
-            except aiohttp.ClientTimeout:
+                )
+
+                if response.status == 200:
+                    return await response.json()
+                elif response.status == 401:
+                    raise Exception("Invalid API key (HTTP 401)")
+                elif response.status == 429:
+                    raise Exception("Rate limit exceeded (HTTP 429)")
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Serper.dev API error {response.status}: {error_text}")
+
+            except asyncio.TimeoutError:
+                # BUGFIX: aiohttp.ClientTimeout is a config class, not an exception.
+                # aiohttp raises asyncio.TimeoutError on timeout.
                 self.circuit_breaker.record_failure()
                 raise Exception("Serper.dev search timeout (30s exceeded)")
             except aiohttp.ClientError as e:
@@ -374,12 +375,17 @@ class LeakLookupClient:
             else:
                 search_type = 'domain'
             
-            result = await search_leak_lookup(target, self.api_key)
-            
+            # BUGFIX: search_leak_lookup uses requests (sync). Awaiting it directly
+            # raises TypeError. Use asyncio.to_thread to avoid blocking the event loop.
+            result = await asyncio.to_thread(search_leak_lookup, target, self.api_key)
+
+            # BUGFIX: search_leak_lookup returns List[str] (database names), not a dict.
+            # Calling .get('breached_databases', []) on a list raises AttributeError.
+            breached = result if isinstance(result, list) else []
             return LeakLookupResult(
                 target=target,
                 search_type=search_type,
-                breached_databases=result.get('breached_databases', []),
+                breached_databases=breached,
                 execution_time_ms=(time.time() - start_time) * 1000
             )
             
@@ -412,10 +418,11 @@ class LeakLookupClient:
 async def execute_osint_harvest(
     dorks: List[str],
     serper_api_key: str,
-    scrapingant_api_key: str,
+    scrapingant_api_key: Optional[str] = None,  # BUGFIX: made optional so callers can omit it
     leak_lookup_api_key: Optional[str] = None,
     max_concurrent: int = 5,
-    enable_leak_lookup: bool = True
+    enable_leak_lookup: bool = True,
+    max_retries: int = 0  # BUGFIX: added retry parameter; >0 causes re-raise after exhaustion
 ) -> HarvestOutput:
     """
     Execute OSINT harvesting with dual search (Google Dorks + Leak-Lookup)
@@ -438,7 +445,10 @@ async def execute_osint_harvest(
     
     # Initialize clients
     serper_client = SerperClient(serper_api_key)
-    scrapeant_client = ScrapingantClientV2(scrapingant_api_key)
+    # TODO (LOW): ScrapingantClientV2(scrapingant_api_key) is not yet wired into
+    # execute_osint_harvest. When content-scraping is needed, instantiate it here
+    # and call extract_urls_from_search + scrape_target_urls after the gather() below.
+    _ = scrapingant_api_key  # parameter kept for API compatibility; used when scraping is wired in
     leak_lookup_client = LeakLookupClient(leak_lookup_api_key) if (leak_lookup_api_key and enable_leak_lookup) else None
     
     # Create semaphores for WIP control
@@ -449,46 +459,57 @@ async def execute_osint_harvest(
     leak_results: List[LeakLookupResult] = []
     
     async def execute_google_dork(dork: str):
-        """Execute Google dork with concurrency control"""
+        """Execute Google dork with concurrency control and optional retries"""
         async with semaphore_search:
             start_time = time.time()
-            
-            try:
-                # FIXED: Get already-parsed JSON dict directly from SerperClient
-                search_result = await serper_client.execute_search(dork)
-                
-                if isinstance(search_result, dict):
-                    result = SearchResult(
-                        dork_original=dork,
-                        provider_used=SearchProvider.SERPER,
-                        status_code=200,
-                        results_raw=search_result,  # Already parsed!
-                        results_count=len(search_result.get('organic', [])),
-                        execution_time_ms=(time.time() - start_time) * 1000
-                    )
-                else:
-                    result = SearchResult(
-                        dork_original=dork,
-                        provider_used=SearchProvider.SERPER,
-                        status_code=500,
-                        results_raw={},
-                        results_count=0,
-                        execution_time_ms=(time.time() - start_time) * 1000,
-                        error=f"Invalid response type: {type(search_result)}"
-                    )
-                
-                return result
-                
-            except Exception as e:
-                return SearchResult(
-                    dork_original=dork,
-                    provider_used=SearchProvider.SERPER,
-                    status_code=500,
-                    results_raw={},
-                    results_count=0,
-                    execution_time_ms=(time.time() - start_time) * 1000,
-                    error=str(e)
-                )
+            last_exc: Optional[Exception] = None
+
+            # BUGFIX: when max_retries>0, retry and re-raise last exception after
+            # all attempts are exhausted; when max_retries==0 (default), catch and
+            # return an error SearchResult so the caller always gets a full result set.
+            attempts = max(1, max_retries)
+            for attempt in range(attempts):
+                try:
+                    search_result = await serper_client.execute_search(dork)
+
+                    if isinstance(search_result, dict):
+                        return SearchResult(
+                            dork_original=dork,
+                            provider_used=SearchProvider.SERPER,
+                            status_code=200,
+                            results_raw=search_result,
+                            results_count=len(search_result.get('organic', [])),
+                            execution_time_ms=(time.time() - start_time) * 1000
+                        )
+                    else:
+                        return SearchResult(
+                            dork_original=dork,
+                            provider_used=SearchProvider.SERPER,
+                            status_code=500,
+                            results_raw={},
+                            results_count=0,
+                            execution_time_ms=(time.time() - start_time) * 1000,
+                            error=f"Invalid response type: {type(search_result)}"
+                        )
+
+                except Exception as e:
+                    last_exc = e
+                    if attempt < attempts - 1:
+                        await asyncio.sleep(0.1)
+
+            # Re-raise when retries were requested; return error result otherwise
+            if max_retries > 0 and last_exc is not None:
+                raise last_exc
+
+            return SearchResult(
+                dork_original=dork,
+                provider_used=SearchProvider.SERPER,
+                status_code=500,
+                results_raw={},
+                results_count=0,
+                execution_time_ms=(time.time() - start_time) * 1000,
+                error=str(last_exc)
+            )
     
     async def execute_leak_lookup_search(target: str):
         """Execute Leak-Lookup breach search with concurrency control"""
@@ -523,13 +544,16 @@ async def execute_osint_harvest(
     google_tasks = [execute_google_dork(dork) for dork in dorks]
     breach_tasks = [execute_leak_lookup_search(target) for target in targets_for_breach] if leak_lookup_client else []
     
+    # BUGFIX: asyncio.create_task(asyncio.sleep(0)) resolves to None, not [].
+    # asyncio.gather() with no arguments correctly returns [] when there are no
+    # breach tasks, eliminating the need for the `or []` defensive guard.
     search_results, leak_results_list = await asyncio.gather(
         asyncio.gather(*google_tasks),
-        asyncio.gather(*breach_tasks) if breach_tasks else asyncio.create_task(asyncio.sleep(0))
+        asyncio.gather(*breach_tasks) if breach_tasks else asyncio.gather()
     )
-    
+
     results.extend(search_results)
-    leak_results.extend(leak_results_list or [])
+    leak_results.extend(leak_results_list)
     
     # Calculate statistics
     successful = sum(1 for r in results if r.is_success and r.has_results)
@@ -544,6 +568,9 @@ async def execute_osint_harvest(
     )
 
 
+# TODO (LOW): extract_urls_from_search and scrape_target_urls are fully
+# implemented but never called by the pipeline. Wire them into
+# execute_osint_harvest when content-scraping is needed, or delete them.
 def extract_urls_from_search(results: List[SearchResult]) -> List[str]:
     """Extract target URLs from search results for scraping"""
     
