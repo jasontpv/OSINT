@@ -1,318 +1,330 @@
 #!/usr/bin/env python3
 """
-OSINT Kanban Pipeline - Main Entry Point (FIXED)
-=================================================
+OSINT Kanban Pipeline - Main Entry Point
+=========================================
 
-This is the main orchestration script that ties together all pipeline stages.
+Multi-stage OSINT investigation tool: RECON → HARVESTING → ANALYST → SCRIBE
 
-Key Fixes Implemented:
-- Proper API key loading from environment variables with absolute path forcing
-- Correct data flow between all 4 stages (RECON → HARVESTING → ANALYST → SCRIBE)
-- Type-safe JSON handling with proper parsing at each stage boundary
-- Scribe stage receives flattened list of facts for PDF population
-- Comprehensive error handling and logging
-
-Author: OSINT Team (Fixed by Senior AI Solutions Architect)
-Date: 2024-12-17
+Usage:
+    python main.py "Matthew Pumphrey" --wip-limit 5 --format both
+    python main.py "example.com" --target-type domain --format pdf --output ./reports
+    python main.py --target "John Doe" --format html --verbose
 """
 
-# Fix Windows console encoding/emoji support
-import sys, io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-
+# BUGFIX: replacing sys.stdout with a TextIOWrapper at import time breaks any
+# library that writes raw bytes to stdout and confuses log handlers that capture
+# the original object. Use the PYTHONIOENCODING=utf-8 env var instead (set in
+# .env or shell) — that is the correct way to control console encoding on Windows.
 import asyncio
 import json
 import logging
 import os
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-# Force absolute path loading of .env file BEFORE any API key usage
+# BUGFIX: Load .env from the script's own directory with an absolute path so
+# the pipeline finds keys regardless of the working directory.
 try:
     from dotenv import load_dotenv
-    
-    # CRITICAL FIX: Load .env from the script's directory regardless of cwd
-    env_path = Path(__file__).parent / '.env'
-    
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path)
-        logging.getLogger('OSINT_MAIN').info(f"✓ Loaded environment variables from {env_path}")
+
+    _env_path = Path(__file__).parent / '.env'
+    if _env_path.exists():
+        load_dotenv(dotenv_path=_env_path)
+        logging.getLogger('OSINT_MAIN').debug(f"Loaded .env from {_env_path}")
     else:
-        # Fallback to default location
-        load_dotenv()
-        logging.getLogger('OSINT_MAIN').warning(f".env not found at expected path, using current directory")
-        
-except ImportError as e:
-    print(f"WARNING: python-dotenv not installed. Install with: pip install python-dotenv")
-    logging.getLogger('OSINT_MAIN').error(f"Failed to import dotenv: {e}")
+        load_dotenv()  # Fallback: search parent directories
+        logging.getLogger('OSINT_MAIN').warning(".env not found at script directory, using CWD fallback")
+
+except ImportError:
+    print("WARNING: python-dotenv not installed. Run: pip install python-dotenv")
 
 
-# Configure logging
+# Configure logging (level may be overridden by --verbose below)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s'
 )
 logger = logging.getLogger('OSINT_MAIN')
 
+# Placeholder values that count as "not configured"
+_PLACEHOLDER_KEYS = {
+    "YOUR_SERPER_API_KEY",
+    "YOUR_SCRAPEANT_API_KEY",
+    "YOUR_LEAK_LOOKUP_API_KEY",
+    "your_serper_api_key",
+    "your_scrapeant_api_key",
+}
+
 
 class OSINTPipeline:
     """Main pipeline orchestrator with proper data flow"""
-    
+
     def __init__(self):
-        # Force reload environment variables to ensure they're loaded
-        self._ensure_env_loaded()
-        
         self.api_keys = {
-            'serper': os.getenv("SERPER_API_KEY"),
+            'serper':     os.getenv("SERPER_API_KEY"),
             'scrapingant': os.getenv("SCRAPEANT_API_KEY"),
-            'leak_lookup': os.getenv("LEAK_LOOKUP_API_KEY")
+            'leak_lookup': os.getenv("LEAK_LOOKUP_API_KEY"),
         }
-        
-        # Validate API keys are present
         self._validate_api_keys()
-    
-    def _ensure_env_loaded(self):
-        """Ensure .env is loaded from absolute path"""
-        try:
-            from dotenv import load_dotenv
-            
-            env_path = Path(__file__).parent / '.env'
-            
-            if env_path.exists():
-                load_dotenv(dotenv_path=env_path)
-                logger.debug(f"Environment variables loaded from {env_path}")
-            else:
-                # Try default location
-                load_dotenv()
-                
-        except Exception as e:
-            logger.warning(f"Failed to load .env file: {e}")
-    
+
     def _validate_api_keys(self):
-        """Ensure required API keys are configured"""
-        
-        # DIAGNOSTIC PRINT - Shows exactly what the method sees
-        print(f"\n{'='*60}")
-        print("API KEY VALIDATION CHECK")
-        print(f"{'='*60}")
-        
-        serper_key = os.getenv('SERPER_API_KEY')
-        scrapeant_key = os.getenv('SCRAPEANT_API_KEY')
-        
-        # Strip sensitive chars for display (show first 4 and last 4)
-        def safe_display(key):
-            if key and len(key) > 8:
-                return f"{key[:4]}...{key[-4:]}"
-            elif key:
-                return "***" + key[3:]
-            else:
-                return "(empty)"
-        
-        print(f"SERPER_API_KEY found: {bool(serper_key)}")
-        print(f"  Value preview: {safe_display(serper_key) if serper_key else '(none)'}")
-        print(f"\nSCRAPINGANT_API_KEY found: {bool(scrapeant_key)}")
-        print(f"  Value preview: {safe_display(scrapeant_key) if scrapeant_key else '(none)'}")
-        
-        # Check for correct variable names (not SERPER_KEY or similar typos)
-        all_env_keys = list(os.environ.keys())
-        serper_variants = [k for k in all_env_keys if 'SERPER' in k.upper() and 'API_KEY' in k]
-        scrapeant_variants = [k for k in all_env_keys if 'SCRAPINGANT' in k.upper()]
-        
-        print(f"\nEnvironment keys containing SERPER: {serper_variants}")
-        print(f"Environment keys containing SCRAPEANT: {scrapeant_variants}")
-        
+        """Ensure required API keys are configured with exact environment variable names.
+
+        BUGFIX: accept only SERPER_API_KEY and SCRAPEANT_API_KEY (not SERPER_KEY or
+        SCRAPINGANT_API_KEY). Raises ValueError with clear instructions if missing.
+        """
         missing = []
-        
-        # Check for exact variable name match (SERPER_API_KEY, not SERPER_KEY)
-        if not serper_key or serper_key == "YOUR_SERPER_API_KEY":
+
+        serper_key = self.api_keys['serper']
+        if not serper_key or serper_key in _PLACEHOLDER_KEYS:
             missing.append("SERPER_API_KEY")
-            
-        if not scrapeant_key or scrapeant_key == "YOUR_SCRAPEANT_API_KEY":
+
+        scrapeant_key = self.api_keys['scrapingant']
+        if not scrapeant_key or scrapeant_key in _PLACEHOLDER_KEYS:
             missing.append("SCRAPEANT_API_KEY")
-        
-        # Check for common typos that might indicate wrong variable name usage
-        if 'SERPER_KEY' in all_env_keys and 'SERPER_API_KEY' not in all_env_keys:
-            logger.warning("Found SERPER_KEY but looking for SERPER_API_KEY - check .env file!")
-            
-        print(f"\n{'='*60}")
-        
+
+        # Warn about common typo variants present in env
+        all_env = list(os.environ.keys())
+        if 'SERPER_KEY' in all_env and 'SERPER_API_KEY' not in all_env:
+            logger.warning("Found SERPER_KEY in environment — the required name is SERPER_API_KEY")
+        if 'SCRAPINGANT_API_KEY' in all_env and 'SCRAPEANT_API_KEY' not in all_env:
+            logger.warning("Found SCRAPINGANT_API_KEY — the required name is SCRAPEANT_API_KEY (no 'ING')")
+
         if missing:
             raise ValueError(
                 f"Missing required API keys: {', '.join(missing)}\n"
-                f"Please set them in .env file or environment variables.\n"
-                f"Required variable names:\n"
-                f"  - SERPER_API_KEY (for Google search via Serper.dev)\n"
-                f"  - SCRAPEANT_API_KEY (for web scraping via ScrapingAnt v2)"
+                f"Add them to your .env file or environment:\n"
+                f"  SERPER_API_KEY=<your Serper.dev key>\n"
+                f"  SCRAPEANT_API_KEY=<your ScrapingAnt v2 key>\n"
+                f"  LEAK_LOOKUP_API_KEY=<optional>\n"
             )
-        
-        logger.info("✓ All required API keys validated successfully")
 
-    async def run_investigation(self, query: str, target_type: str = "person") -> Dict[str, Any]:
+        logger.info("All required API keys validated")
+
+    async def run_investigation(
+        self,
+        query: str,
+        target_type: str = "person",
+        report_format: str = "both",
+        output_path: str = "./reports",
+        wip_limit: int = 5,
+    ) -> Dict[str, Any]:
         """
-        Run a complete OSINT investigation through all 4 stages
-        
+        Run a complete OSINT investigation through all 4 stages.
+
         Args:
-            query: Search query or target to investigate
-            target_type: Type of target (person, company, domain, product)
-            
+            query:         Search query or target to investigate.
+            target_type:   Entity type — person | company | domain | product.
+            report_format: Output format — pdf | html | both.
+            output_path:   Directory where reports are written.
+            wip_limit:     Work-in-progress limit per Kanban column.
+
         Returns:
-            Dictionary with investigation results and report path
-            
-        Data Flow:
-            RECON → HARVESTING → ANALYST → SCRIBE
-            Each stage passes properly typed data to the next
+            Dict with status, report_path, and execution metrics.
         """
-        
-        logger.info(f"Starting OSINT investigation for: {query} (Type: {target_type})")
-        
+        logger.info(f"Starting investigation: '{query}' (type={target_type}, fmt={report_format})")
+
+        # Ensure output directory exists
+        Path(output_path).mkdir(parents=True, exist_ok=True)
+
         try:
-            # Import pipeline manager
             from osint_kanban_manager import OSINTKanbanManager, PipelineConfig
-            
-            # Create configuration with API keys
+
+            # BUGFIX: wip_limit and report_format are now accepted and forwarded
+            wip_limits = {stage: wip_limit for stage in ("RECON", "HARVESTING", "ANALYST", "SCRIBE")}
             config = PipelineConfig(
                 query=query,
                 target_name=target_type,
+                wip_limits=wip_limits,
                 serper_api_key=self.api_keys['serper'],
                 scrapingant_api_key=self.api_keys['scrapingant'],
-                leak_lookup_api_key=self.api_keys.get('leak_lookup') or None
+                leak_lookup_api_key=self.api_keys.get('leak_lookup') or None,
             )
-            
-            # Initialize and run pipeline
+
             manager = OSINTKanbanManager(config)
-            
-            logger.info("Starting pipeline execution...")
             await manager.start_pipeline(query, target_type)
-            
+
             results = await manager.execute_pipeline(
                 query=query,
-                output_path="./reports"
+                report_format=report_format,
+                output_path=output_path,
+                graceful_failure_handling=True,
             )
-            
-            # Compile final results
-            investigation_result = {
+
+            return {
                 "status": "completed",
                 "query": query,
                 "target_type": target_type,
+                "report_format": report_format,
                 "total_processed": results.total_processed,
                 "successful": results.successful,
                 "failed": results.failed,
                 "execution_time_seconds": round(results.execution_time, 2),
                 "report_path": results.report_path,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-            
-            logger.info(f"✓ Investigation complete: {investigation_result}")
-            
-            return investigation_result
-            
+
         except Exception as e:
             logger.error(f"Investigation failed: {e}")
-            import traceback
             traceback.print_exc()
-            
             return {
                 "status": "failed",
                 "query": query,
                 "target_type": target_type,
+                "failed": 1,
                 "error": str(e),
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
 
 def print_investigation_summary(result: Dict[str, Any]):
-    """Print a formatted summary of the investigation results"""
-    
-    print("\n" + "="*70)
+    """Print a formatted summary of the investigation results."""
+
+    print("\n" + "=" * 70)
     print("OSINT INVESTIGATION SUMMARY")
-    print("="*70)
-    
+    print("=" * 70)
+
     if result.get("status") == "completed":
-        print(f"\n🎯 Target: {result['query']} ({result['target_type']})")
-        print(f"✅ Status: COMPLETED SUCCESSFULLY")
-        print(f"⏱️  Execution Time: {result['execution_time_seconds']}s")
-        print(f"📊 Processed: {result['total_processed']} items")
-        print(f"✓ Successful: {result['successful']}")
-        print(f"✗ Failed: {result['failed']}")
-        
-        if result.get("report_path"):
-            print(f"\n📄 Report Location: {result['report_path']}")
-            
-            # Check if report exists
-            if os.path.exists(result["report_path"]):
-                file_size = os.path.getsize(result["report_path"])
-                print(f"   File Size: {file_size:,} bytes ({file_size/1024:.2f} KB)")
+        print(f"\nTarget:         {result['query']} ({result['target_type']})")
+        print(f"Status:         COMPLETED")
+        print(f"Format:         {result.get('report_format', 'both')}")
+        print(f"Execution time: {result['execution_time_seconds']}s")
+        print(f"Processed:      {result['total_processed']}")
+        print(f"Successful:     {result['successful']}")
+        print(f"Failed:         {result['failed']}")
+
+        rp = result.get("report_path")
+        if rp:
+            print(f"\nReport: {rp}")
+            if os.path.exists(rp):
+                size = os.path.getsize(rp)
+                print(f"  Size: {size:,} bytes ({size / 1024:.1f} KB)")
         else:
-            print("\n⚠️  No report path available")
-    
+            print("\nNo report path available")
+
     elif result.get("status") == "failed":
-        print(f"\n❌ Status: FAILED")
-        print(f"🔍 Target: {result['query']} ({result['target_type']})")
-        print(f"💥 Error: {result.get('error', 'Unknown error')}")
-    
+        print(f"\nStatus:  FAILED")
+        print(f"Target:  {result['query']} ({result.get('target_type', '?')})")
+        print(f"Error:   {result.get('error', 'unknown')}")
+
     else:
-        print(f"\n⚠️  Unknown status: {result.get('status')}")
-    
-    print("="*70)
+        print(f"\nUnknown status: {result.get('status')}")
+
+    print("=" * 70)
 
 
 async def main():
-    """Main entry point for CLI usage"""
-    
+    """Main entry point for CLI usage."""
+
     import argparse
-    
+
+    # BUGFIX: re-added --wip-limit, --format, and --output flags that were
+    # missing from the previous implementation, causing argparse to reject
+    # valid README command lines.
     parser = argparse.ArgumentParser(
-        description='OSINT Kanban Pipeline - Multi-stage OSINT Investigation Tool',
+        description='OSINT Kanban Pipeline — Multi-stage investigation tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py "john.doe@example.com" --target-type person
-  python main.py "example.com" --target-type company
-  python main.py "product name" --target-type product
+  python main.py "Matthew Pumphrey" --wip-limit 5 --format both
+  python main.py "example.com" --target-type domain --format pdf --output ./reports
+  python main.py --target "John Doe" --format html --verbose
 
-Environment Variables Required:
-  SERPER_API_KEY     - Google search API key (Serper.dev)
-  SCRAPEANT_API_KEY  - Web scraping API key (ScrapingAnt v2)
-  LEAK_LOOKUP_API_KEY (Optional) - Breach database lookup API key
-        """
+Required environment variables (.env):
+  SERPER_API_KEY      — Google search via Serper.dev
+  SCRAPEANT_API_KEY   — Web scraping via ScrapingAnt v2
+  LEAK_LOOKUP_API_KEY — (optional) breach database lookup
+        """,
     )
-    
-    parser.add_argument('query', help='Search query or target to investigate')
-    parser.add_argument('--target-type', default='person',
-                       choices=['person', 'company', 'domain', 'product'],
-                       help='Type of target being investigated (default: person)')
-    parser.add_argument('--verbose', '-v', action='store_true',
-                       help='Enable verbose logging output')
-    
+
+    # Positional argument — the target/query string
+    # BUGFIX: made nargs='?' so --target can supply it instead when provided
+    parser.add_argument(
+        'query',
+        nargs='?',
+        default=None,
+        help='Search query or target to investigate (positional)',
+    )
+
+    # BUGFIX: added --target as an alternative way to pass the query string,
+    # matching the README example `python main.py --target "Matthew Pumphrey"`.
+    parser.add_argument(
+        '--target',
+        default=None,
+        metavar='QUERY',
+        help='Target query (alternative to positional argument)',
+    )
+
+    parser.add_argument(
+        '--target-type',
+        default='person',
+        choices=['person', 'company', 'domain', 'product'],
+        help='Entity type being investigated (default: person)',
+    )
+
+    # BUGFIX: added --wip-limit flag (README "WIP Limits" section)
+    parser.add_argument(
+        '--wip-limit',
+        type=int,
+        default=5,
+        metavar='N',
+        help='Work-in-progress limit per Kanban column (default: 5)',
+    )
+
+    # BUGFIX: added --format flag to control report output format
+    parser.add_argument(
+        '--format',
+        default='both',
+        choices=['pdf', 'html', 'both'],
+        help='Report output format (default: both)',
+    )
+
+    # BUGFIX: added --output flag for custom report directory
+    parser.add_argument(
+        '--output',
+        default='./reports',
+        metavar='PATH',
+        help='Output directory for reports (default: ./reports)',
+    )
+
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Enable DEBUG-level logging',
+    )
+
     args = parser.parse_args()
-    
-    # Set log level based on verbosity
+
+    # Resolve the query from positional or --target
+    query = args.query or args.target
+    if not query:
+        parser.error("Provide a query either as a positional argument or via --target")
+
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
-    
+
     try:
-        # Initialize and run pipeline
         pipeline = OSINTPipeline()
-        
+
         logger.info("Starting OSINT Kanban Pipeline...")
         result = await pipeline.run_investigation(
-            query=args.query,
-            target_type=args.target_type
+            query=query,
+            target_type=args.target_type,
+            report_format=args.format,
+            output_path=args.output,
+            wip_limit=args.wip_limit,
         )
-        
-        # Print summary to console
+
         print_investigation_summary(result)
-        
-        # Return exit code based on success
         return 0 if result.get("status") == "completed" else 1
-        
+
     except KeyboardInterrupt:
-        logger.info("\n⚠️  Pipeline interrupted by user")
+        logger.info("Pipeline interrupted by user")
         return 130
     except Exception as e:
-        logger.error(f"\n❌ Fatal error: {e}")
-        import traceback
+        logger.error(f"Fatal error: {e}")
         traceback.print_exc()
         return 1
 
