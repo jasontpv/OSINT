@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment / secrets
+.env
+*.env.local
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Generated reports & pipeline output
+reports/
+OSINT_WORKSPACE/data/reports/
+test_output/
+analyst_output/
+data/harvesting/
+data/
+
+# Database (runtime artifact)
+osint.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Archives & large binaries
+*.zip
+*.tar.gz
+*.pdf
+
+# IDE / OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# MWX tasks checkpoint
+.mwx/

@@ -1,77 +1,190 @@
-You are a senior Python developer assigned to repair the OSINT Kanban pipeline’s entry script (main.py) and its SQLite database layer (database_manager.py).  
-The user has supplied terminal output that shows two groups of problems:
+Task Prompt – High‑Level Overview
 
-1. Command‑line argument parsing failures – the flags described in README.md (`--target`, `--wip-limit`, `--format`) are not being recognized by argparse.
-2. Database “disk image is malformed” errors – repeated “Unexpected database error during connection” messages when inserting facts.
+Objective:
 
-Your tasks:
+Modernise the MythWorx OSINT framework so that it respects a user‑chosen privacy mode (public, private, hybrid), automatically updates every registered CLI‑tool repository after one week, and intelligently selects & installs the correct local binary (e.g., whois for domains, nmap for IPs) during the HARVESTING stage.
 
---------------------------------------------------------------------
-A) Re‑implement argparse to match the README specification
-   * Required positional argument: `query` (the target string).
-   * Optional flags:
-        - `--target-type {person,company,domain,product}` – default `person`.
-        - `--wip-limit N` – integer, default 5 (taken from README “WIP Limits” section).
-        - `--format {pdf,html,both}` – default `both`. This flag should affect the `run_investigation` method: if `format='pdf'` only generate PDF, etc.
-        - `--output PATH` – optional output directory; if omitted use `./reports`.
-        - `--verbose` – set logging level to DEBUG.
-   * The parser must treat everything after the positional `query` as part of that argument (i.e., `python main.py "Matthew Pumphrey" --wip-limit 5 ...`).  
-     Hint: put `query` before any optional flags in the signature.
+The system must also be able to switch between a local LLM (Ollama/LM‑Studio) or a cloud LLM based on the chosen privacy mode, and store all decisions in persistent JSON files (~/.osint_last_run.json, ~/.cli_tools.json).
 
-B) Load environment variables correctly
-   * Use `dotenv.load_dotenv()` with absolute path `Path(__file__).parent / '.env'`.
-   * Accept only the exact names `SERPER_API_KEY`, `SCRAPEANT_API_KEY`, and optionally `LEAK_LOOKUP_API_KEY`.  
-     If any are missing or equal to placeholder strings (`YOUR_SERPER_API_KEY` etc.) raise a ValueError with clear instructions.
+All new behaviour should be added without breaking the existing pipeline; the agent will therefore:
 
-C) Fix database connection
-   * In `database_manager.py` ensure the SQLite file is located at `c:\AI_Agent\osint.db` (or on Linux `./osint.db`).  
-     Create the directory if it does not exist.  
-   * On first run, create tables:
-        ```
-        CREATE TABLE IF NOT EXISTS verified_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fact_json TEXT NOT NULL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL,
-            details TEXT,
-            error_msg TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-        ```
-   * Remove any temporary connection code that points to `temp.sqlite` or uses in‑memory DB.  
-   * Wrap every `INSERT INTO verified_facts` in a try/except block that logs the error and records it into `audit_log` with `event_type='DB_INSERT'`.
+add a --privacy flag to main.py;
+propagate that flag through the pipeline configuration;
+modify key‑validation logic accordingly;
+create an LLM helper that returns either a local or cloud client;
+implement a time‑based auto‑update routine for tool repos;
+extend PipelineConfig with a tool_repos dictionary;
+add a “target‑type → CLI tool” mapping inside the wrapper and a public method execute_tool_for_target;
+trigger that method from the HARVESTING stage;
+persist binary paths in ~/.cli_tools.json.
+After the changes, running python main.py "example.com" should:
 
-D) Add robust error handling in main.py
-   * Surround each stage call (`_process_recon`, `_process_harvesting`, …) with `try/except Exception as e:`.  
-     On exception, log the traceback and continue to next ticket instead of aborting the whole pipeline.
-   * If a stage raises an unhandled exception, set a flag in the result dict: `"failed": 1` and include the error message.
+ask to install whois on first use (or skip if already installed),
+launch it automatically during harvesting,
+generate a report (PDF/HTML) with the chosen LLM, and
+update any tool repos if more than 7 days have passed since the last run.
+The following detailed step‑by‑step instructions will guide the agent through each of these changes.
 
-E) Verify that after the fixes:
-   * Running `python main.py --target "Matthew Pumphrey" --wip-limit 5 --format both` parses correctly and produces a report at `./reports/OSINT_Investigation:_Matthew_Pumphrey_YYYYMMDD_HHMMSS.pdf`.
-   * No more “disk image is malformed” errors appear.
-   * The database file contains the inserted fact(s) when you open it with any SQLite viewer.
+[  What the agent must implement / verify  -	Where in the codebase (file + function) -	Expected behaviour ]
 
-F) Produce unit tests (optional but recommended)
-   * Test that argparse accepts all README flags and returns expected defaults.
-   * Test that missing API keys raise ValueError.
-   * Test that a successful run creates entries in `verified_facts`.
+1	Add a --privacy command‑line flag (public, private, hybrid). The default (hybrid) should keep the current “optional key” logic. -	main.py  argparse section.	User can explicitly choose privacy mode.
 
-G) Commit style
-   * Each critical change gets its own commit with message “Fix …”.  
-   * Add comments like `# BUGFIX: re‑added --format flag` next to the code you modify.
+2	Propagate the flag into the pipeline configuration so that every stage (RECON, HARVESTING, ANALYST) knows the chosen mode. -	OSINTPipeline.__init__, store as self.privacy_mode.	All API‑client builders read this value.
 
-Deliverables:
-1. Updated `main.py`.
-2. Updated `database_manager.py`.
-3. (Optional) Test file `test_cli_and_db.py`.
+3	Modify key‑validation – a missing key is only an error when private; in public it is silently ignored; hybrid keeps the original “optional” behaviour.	_validate_api_keys() inside OSINTPipeline.	Running with --privacy public works even without keys.
 
-Run `pytest -q` after modifications and report “All X tests passed”. If any error persists, log it with a timestamp.
+4	Create a LLM‑selection helper – based on self.privacy_mode decide whether to use the local Ollama/LM‑Studio client or a cloud endpoint (e.g., OpenAI). This should be exposed as get_llm_client() that returns a callable client(prompt).	Add a new method in OSINTPipeline.	When privacy is public, the agent can call a fast cloud LLM; when private it must use the local client.
 
-You may use the following tools if you need to verify API key names or other external data:
-- `Web_Search`
-- `call_aws` (not required here)
+5	Persist the “last run” timestamp (already present as _load_last_run/_save_last_run). The pipeline should, before starting, compare current epoch with stored value and if > 7 days call a new helper that updates all registered tool repos.	OSINTPipeline.run_investigation() – add the time‑check and call await self._update_registered_tools(config).	After 7 days the system automatically pulls the latest commit of each repo in config.tool_repos.
 
-**Start now – fix the script and database so the pipeline works exactly as described in README.md.**
+6	Extend PipelineConfig to accept a tool_repos: Dict[str,str] (key = tool name, value = GitHub URL). Update its __init__ accordingly.	osint_kanban_manager.py – where PipelineConfig is instantiated.	The manager now knows which tools exist and can ask the wrapper to use them.
+
+7	Add a “tool‑by‑target” mapping inside osint_cli_wrapper. Example: {"domain": ["whois"], "ip_address": ["nmap"]}. Create a method execute_tool_for_target(target_type, target_value) that looks up the binary (using the persisted map), prompts for installation if missing, clones via ToolProvisioner, records path in ~/.cli_tools.json and finally runs the command with a sane timeout.	osint_cli_wrapper.py.	During HARVESTING the wrapper will automatically launch the correct CLI tool.
+
+8	Trigger the wrapper from the HARVESTING stage – after each API result is processed, inspect its type (e.g., if it contains an IP or a domain) and call cli_runner.execute_tool_for_target(...).	OSINTKanbanManager._process_harvesting().	CLI tools are now used explicitly in the pipeline.
+
+9	Implement the auto‑update routine (_update_registered_tools) that iterates over config.tool_repos, creates a ToolProvisioner instance, calls provision_tool_from_github(..., security_check=False) and ignores errors (logging only).	Inside OSINTPipeline.	After 7 days the system stays up‑to‑date without user intervention.
+
+10	Add a helper to choose between local LLM (Ollama/LM‑Studio) or cloud – based on privacy_mode and an optional env variable USE_CLOUD_LLM. Return a callable that accepts a prompt string and returns the completion text.	New method in OSINTPipeline.	The ANALYST stage can now ask for fact verification via the chosen LLM.
+
+11	Update README / docs – note the new flags, privacy behaviour and how to add new tool repos (edit config.tool_repos).	Documentation files.	Users understand how to extend the system.
+
+
+Example Code Additions
+Below are the exact code snippets you can drop into the indicated places.
+
+main.py – argparse
+
+Copy
+python
+parser.add_argument(
+    "--privacy",
+    "-p",
+    default="hybrid",
+    choices=["public", "private", "hybrid"],
+    help="API key handling: public (ignore), private (require), hybrid (default)",
+)
+main.py – create pipeline
+
+Copy
+python
+pipeline = OSINTPipeline(privacy_mode=args.privacy)
+OSINTPipeline.__init__
+
+Copy
+python
+class OSINTPipeline:
+    def __init__(self, privacy_mode: str = "hybrid"):
+        self.privacy_mode = privacy_mode.lower()
+        ...
+Key‑validation
+
+Copy
+python
+def _validate_api_keys(self):
+    missing = []
+    if self.api_keys["serper"] in _PLACEHOLDER_KEYS:
+        if self.privacy_mode == "private":
+            missing.append("SERPER_API_KEY")
+    # same for scrapeant, leak_lookup …
+    if missing and self.privacy_mode != "public":
+        raise ValueError(...)
+LLM helper
+
+Copy
+python
+def get_llm_client(self):
+    if self.privacy_mode == "private" or os.getenv("USE_CLOUD_LLM") == "1":
+        # Return cloud client (e.g., OpenAI)
+        return lambda prompt: openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}]
+        ).choices[0].message.content
+    else:
+        # Return local Ollama client
+        return lambda prompt: ollama.Completion(prompt=prompt, model="llama3.2")
+Auto‑update call
+
+Copy
+python
+now_ts = time.time()
+prev_ts = _load_last_run()
+if now_ts - prev_ts > 7 * 24 * 60 * 60:
+    await self._update_registered_tools(config)
+_save_last_run(now_ts)
+PipelineConfig new attribute
+
+Copy
+python
+class PipelineConfig:
+    def __init__(self, ..., tool_repos: Dict[str,str] = None):
+        ...
+        self.tool_repos = tool_repos or {}
+osint_cli_wrapper.py – mapping & execution
+
+Copy
+python
+class CLICommandRunner:
+    TOOL_MAP_BY_TARGET = {
+        "domain": ["whois"],
+        "ip_address": ["nmap"]
+    }
+
+    async def execute_tool_for_target(self, target_type: str, target_value: str,
+                                       timeout: int = 120) -> ProcessResult:
+        tools = self.TOOL_MAP_BY_TARGET.get(target_type, [])
+        for tool in tools:
+            binary = self.tool_binaries.get(tool)
+            if not binary or not Path(binary).exists():
+                # Prompt and provision …
+OSINTKanbanManager._process_harvesting() – trigger wrapper
+
+Copy
+python
+from osint_cli_wrapper import CLICommandRunner
+cli_runner = CLICommandRunner(workspace_dir="./OSINT_WORKSPACE")
+
+for result in harvest_output.search_results:
+    if "ip" in result.query.lower():
+        await cli_runner.execute_tool_for_target("ip_address", result.query)
+    elif "." in result.query or "domain" in result.query.lower():
+        await cli_runner.execute_tool_for_target("domain", result.query)
+OSINTPipeline._update_registered_tools()
+
+Copy
+python
+async def _update_registered_tools(self, config: PipelineConfig):
+    if not getattr(config, "tool_repos", {}):
+        return
+    prov = ToolProvisioner(workspace_root="./OSINT_WORKSPACE")
+    for name, url in config.tool_repos.items():
+        report = prov.provision_tool_from_github(url,
+                                                  install_dependencies=True,
+                                                  security_check=False)
+        if not report.repo_cloned.success:
+            logger.warning(f"Failed to update {name}: {report.repo_cloned.error_message}")
+
+
+How the Agent Should Execute These Tasks
+
+Parse the current main.py, locate the argparse block, and insert the privacy flag exactly as shown in snippet 1.
+Locate the pipeline creation line (the call to OSINTPipeline()) and replace it with the version that passes privacy_mode=args.privacy.
+Open osint_kanban_manager.py, find the definition of PipelineConfig, add the new tool_repos parameter, and store it on the instance.
+In main.py after argument parsing, build a dictionary of known tool repos (e.g., {"whois": "https://github.com/example/whois-tool", ...}) and pass it to PipelineConfig.
+Implement the LLM helper inside OSINTPipeline. The helper should read an env variable (USE_CLOUD_LLM) or fall back to the local Ollama client when privacy is not “private”.
+Add the time‑check logic in run_investigation() just before calling the manager, using the provided _load_last_run/_save_last_run.
+Create/modify the osint_cli_wrapper.py file: add the mapping, the binary lookup, the prompt‑and‑install flow, and expose the new public method execute_tool_for_target(). Ensure that it updates ~/.cli_tools.json after a successful installation.
+Insert calls to the wrapper inside the HARVESTING stage (_process_harvesting). Use simple heuristics (IP string → nmap, domain string → whois). For more complex detection you can later replace the heuristic with a proper regex or a dedicated “target type” field in SearchResult.
+
+Write tests:
+Run python main.py "example.com" – first run should ask to install whois.
+Run again – no prompt.
+Wait 7 days (or manually edit the timestamp file) and run again – it should re‑clone the repo if a newer commit exists.
+Try --privacy public without setting keys – pipeline still works.
+Try --privacy private with missing key – error is raised.
+If all tests pass, the project now fully implements:
+
+Privacy‑first execution (public/private/hybrid).
+Automatic tool updates after a week.
+On‑demand CLI tool installation & usage during HARVESTING.
+Local vs cloud LLM selection based on privacy mode.
