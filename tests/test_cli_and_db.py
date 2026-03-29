@@ -32,6 +32,8 @@ def _parse(argv: list) -> object:
     parser.add_argument('--wip-limit', type=int, default=5)
     parser.add_argument('--format', default='both', choices=['pdf', 'html', 'both'])
     parser.add_argument('--output', default='./reports')
+    parser.add_argument('--privacy', '-p', default='hybrid',
+                        choices=['public', 'private', 'hybrid'])
     parser.add_argument('--verbose', '-v', action='store_true')
     return parser.parse_args(argv)
 
@@ -102,6 +104,27 @@ class TestArgparse:
         assert args.wip_limit == 5
         assert args.format == 'both'
 
+    def test_privacy_default(self):
+        args = _parse(['query'])
+        assert args.privacy == 'hybrid'
+
+    def test_privacy_public(self):
+        args = _parse(['query', '--privacy', 'public'])
+        assert args.privacy == 'public'
+
+    def test_privacy_private(self):
+        args = _parse(['query', '--privacy', 'private'])
+        assert args.privacy == 'private'
+
+    def test_privacy_short_alias(self):
+        args = _parse(['query', '-p', 'private'])
+        assert args.privacy == 'private'
+
+    def test_privacy_invalid_rejected(self):
+        import argparse
+        with pytest.raises(SystemExit):
+            _parse(['query', '--privacy', 'secret'])
+
 
 # ── API key validation tests ──────────────────────────────────────────────────
 
@@ -161,6 +184,49 @@ class TestApiKeyValidation:
         }, clear=False):
             with pytest.raises(ValueError, match='SERPER_API_KEY'):
                 OSINTPipeline()
+
+    def test_public_mode_missing_keys_no_raise(self):
+        """--privacy public must NOT raise even when both keys are missing."""
+        from main import OSINTPipeline
+        env = {'SERPER_API_KEY': '', 'SCRAPEANT_API_KEY': ''}
+        with patch.dict(os.environ, env, clear=False):
+            os.environ['SERPER_API_KEY'] = ''
+            os.environ['SCRAPEANT_API_KEY'] = ''
+            # Should complete without raising
+            p = OSINTPipeline(privacy_mode='public')
+            assert p.privacy_mode == 'public'
+
+    def test_private_mode_missing_key_raises(self):
+        """--privacy private must raise even when only one key is missing."""
+        from main import OSINTPipeline
+        with patch.dict(os.environ, {
+            'SERPER_API_KEY': '',
+            'SCRAPEANT_API_KEY': 'valid',
+        }, clear=False):
+            os.environ['SERPER_API_KEY'] = ''
+            with pytest.raises(ValueError, match='SERPER_API_KEY'):
+                OSINTPipeline(privacy_mode='private')
+
+    def test_hybrid_mode_missing_key_raises(self):
+        """--privacy hybrid (default) must raise on missing keys."""
+        from main import OSINTPipeline
+        with patch.dict(os.environ, {
+            'SERPER_API_KEY': 'valid',
+            'SCRAPEANT_API_KEY': '',
+        }, clear=False):
+            os.environ['SCRAPEANT_API_KEY'] = ''
+            with pytest.raises(ValueError, match='SCRAPEANT_API_KEY'):
+                OSINTPipeline(privacy_mode='hybrid')
+
+    def test_privacy_mode_stored_on_instance(self):
+        """privacy_mode must be stored on the pipeline instance."""
+        from main import OSINTPipeline
+        with patch.dict(os.environ, {
+            'SERPER_API_KEY': 'key1',
+            'SCRAPEANT_API_KEY': 'key2',
+        }, clear=False):
+            p = OSINTPipeline(privacy_mode='private')
+            assert p.privacy_mode == 'private'
 
 
 # ── DatabaseManager tests ─────────────────────────────────────────────────────
