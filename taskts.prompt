@@ -1,0 +1,77 @@
+You are a senior Python developer assigned to repair the OSINT Kanban pipeline’s entry script (main.py) and its SQLite database layer (database_manager.py).  
+The user has supplied terminal output that shows two groups of problems:
+
+1. Command‑line argument parsing failures – the flags described in README.md (`--target`, `--wip-limit`, `--format`) are not being recognized by argparse.
+2. Database “disk image is malformed” errors – repeated “Unexpected database error during connection” messages when inserting facts.
+
+Your tasks:
+
+--------------------------------------------------------------------
+A) Re‑implement argparse to match the README specification
+   * Required positional argument: `query` (the target string).
+   * Optional flags:
+        - `--target-type {person,company,domain,product}` – default `person`.
+        - `--wip-limit N` – integer, default 5 (taken from README “WIP Limits” section).
+        - `--format {pdf,html,both}` – default `both`. This flag should affect the `run_investigation` method: if `format='pdf'` only generate PDF, etc.
+        - `--output PATH` – optional output directory; if omitted use `./reports`.
+        - `--verbose` – set logging level to DEBUG.
+   * The parser must treat everything after the positional `query` as part of that argument (i.e., `python main.py "Matthew Pumphrey" --wip-limit 5 ...`).  
+     Hint: put `query` before any optional flags in the signature.
+
+B) Load environment variables correctly
+   * Use `dotenv.load_dotenv()` with absolute path `Path(__file__).parent / '.env'`.
+   * Accept only the exact names `SERPER_API_KEY`, `SCRAPEANT_API_KEY`, and optionally `LEAK_LOOKUP_API_KEY`.  
+     If any are missing or equal to placeholder strings (`YOUR_SERPER_API_KEY` etc.) raise a ValueError with clear instructions.
+
+C) Fix database connection
+   * In `database_manager.py` ensure the SQLite file is located at `c:\AI_Agent\osint.db` (or on Linux `./osint.db`).  
+     Create the directory if it does not exist.  
+   * On first run, create tables:
+        ```
+        CREATE TABLE IF NOT EXISTS verified_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fact_json TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            details TEXT,
+            error_msg TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        ```
+   * Remove any temporary connection code that points to `temp.sqlite` or uses in‑memory DB.  
+   * Wrap every `INSERT INTO verified_facts` in a try/except block that logs the error and records it into `audit_log` with `event_type='DB_INSERT'`.
+
+D) Add robust error handling in main.py
+   * Surround each stage call (`_process_recon`, `_process_harvesting`, …) with `try/except Exception as e:`.  
+     On exception, log the traceback and continue to next ticket instead of aborting the whole pipeline.
+   * If a stage raises an unhandled exception, set a flag in the result dict: `"failed": 1` and include the error message.
+
+E) Verify that after the fixes:
+   * Running `python main.py --target "Matthew Pumphrey" --wip-limit 5 --format both` parses correctly and produces a report at `./reports/OSINT_Investigation:_Matthew_Pumphrey_YYYYMMDD_HHMMSS.pdf`.
+   * No more “disk image is malformed” errors appear.
+   * The database file contains the inserted fact(s) when you open it with any SQLite viewer.
+
+F) Produce unit tests (optional but recommended)
+   * Test that argparse accepts all README flags and returns expected defaults.
+   * Test that missing API keys raise ValueError.
+   * Test that a successful run creates entries in `verified_facts`.
+
+G) Commit style
+   * Each critical change gets its own commit with message “Fix …”.  
+   * Add comments like `# BUGFIX: re‑added --format flag` next to the code you modify.
+
+Deliverables:
+1. Updated `main.py`.
+2. Updated `database_manager.py`.
+3. (Optional) Test file `test_cli_and_db.py`.
+
+Run `pytest -q` after modifications and report “All X tests passed”. If any error persists, log it with a timestamp.
+
+You may use the following tools if you need to verify API key names or other external data:
+- `Web_Search`
+- `call_aws` (not required here)
+
+**Start now – fix the script and database so the pipeline works exactly as described in README.md.**

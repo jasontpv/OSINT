@@ -14,7 +14,7 @@ Usage:
 """
 
 import requests
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any
 from enum import Enum
 
 
@@ -241,8 +241,8 @@ def _extract_breached_databases(data: Dict[str, Any]) -> List[str]:
     return cleaned_results
 
 
-def search_leak_lookup_batch(targets: List[str], api_key: str, 
-                             max_concurrent: int = 3) -> Dict[str, List[str]]:
+async def search_leak_lookup_batch(targets: List[str], api_key: str,
+                                   max_concurrent: int = 3) -> Dict[str, List[str]]:
     """
     Perform batch searches on Leak-Lookup.com API.
 
@@ -254,32 +254,27 @@ def search_leak_lookup_batch(targets: List[str], api_key: str,
     Returns:
         Dict[str, List[str]]: Dictionary mapping each target to its list of breached databases.
             Example: {"user@example.com": ["LinkedIn", "Adobe"], "example.com": ["Collection#1"]}
-    
-    Note:
-        Uses ThreadPoolExecutor for concurrent requests while respecting rate limits.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
-    results = {}
-    
-    with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
-        future_to_target = {
-            executor.submit(search_leak_lookup, target, api_key): target 
-            for target in targets
-        }
-        
-        for future in as_completed(future_to_target):
-            target = future_to_target[future]
-            
+    import asyncio
+
+    # BUGFIX: the previous implementation used ThreadPoolExecutor which submits
+    # synchronous work on a thread pool but still blocks the asyncio event loop
+    # when awaited, defeating the point of async concurrency.
+    # Use asyncio.to_thread so each blocking requests.get() runs in the default
+    # thread-pool executor without stalling other coroutines.
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def _search_one(target: str) -> tuple:
+        async with semaphore:
             try:
-                result = future.result()
-                results[target] = result
+                result = await asyncio.to_thread(search_leak_lookup, target, api_key)
+                return target, result
             except LeakLookupError as e:
-                # Log error but don't fail entire batch
                 print(f"Warning: Failed to search {target}: {e}")
-                results[target] = []
-    
-    return results
+                return target, []
+
+    pairs = await asyncio.gather(*[_search_one(t) for t in targets])
+    return {target: result for target, result in pairs}
 
 
 if __name__ == "__main__":

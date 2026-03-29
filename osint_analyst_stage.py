@@ -353,30 +353,39 @@ class FactExtractor:
                 length_groups[text_len] = []
             length_groups[text_len].append(fact)
         
-        # Process each group with early termination optimization
+        # BUGFIX: the previous early-termination block added ALL remaining
+        # within-tolerance pairs to processed_count on every outer iteration,
+        # inflating the counter and triggering the 90 % break after just the
+        # first element was examined. The length_groups dict and total_pairs
+        # calculation were also unused after the loop was fixed.
+        # Solution: move the counter increment inside the inner loop so it
+        # only advances for pairs that were actually evaluated, and check
+        # the threshold after the inner loop completes for each f1.
+        total_pairs = sum(
+            1 for i in range(len(usernames))
+            for j in range(i + 1, len(usernames))
+            if abs(len(str(usernames[i].text)) - len(str(usernames[j].text))) <= 5
+        )
         processed_count = 0
-        total_pairs = sum(len(group) * (len(group) - 1) // 2 for group in length_groups.values())
-        
+
         for i, f1 in enumerate(usernames):
             text1 = str(f1.text)
-            
-            # Early termination: if we've processed most pairs, skip remaining comparisons
-            processed_count += len([f for f in usernames[i+1:] 
-                                   if abs(len(text1) - len(str(f.text))) <= 5])
-            if processed_count > total_pairs * 0.9 and i < len(usernames) - 1:
-                # Already checked 90% of reasonable pairs, skip remaining
-                break
-            
-            for f2 in usernames[i+1:]:
+
+            for f2 in usernames[i + 1:]:
                 text2 = str(f2.text)
-                
+
                 # Skip if lengths differ significantly (optimization)
                 if abs(len(text1) - len(text2)) > 5:
                     continue
-                
+
+                processed_count += 1
                 similarity = difflib.SequenceMatcher(None, text1, text2).ratio()
                 if similarity >= threshold:
                     f1.text += f" (Likely alias: {f2.text})"
+
+            # Only break after completing an entire f1 row, not mid-row
+            if total_pairs > 0 and processed_count / total_pairs >= 0.9:
+                break
 
     @staticmethod
     def apply_confidence_decay(fact: Any):
@@ -503,8 +512,11 @@ class AnalystAgent:
         # Apply boost from cross-references
         if cross_matches:
             max_boost = max(m.confidence_boost for m in cross_matches)
-            base_score += max_boost * len(cross_matches)
-        
+            # BUGFIX: multiplying max_boost by match count caused scores well above 1.0
+            # before the clamp (e.g. 5 matches × 0.3 = +1.5). Cap total boost at
+            # max_boost so one strong cross-reference is the ceiling, not a multiplier.
+            base_score += min(max_boost, max_boost * len(cross_matches))
+
         # Clamp score between 0 and 1.0
         return min(1.0, max(0.0, base_score))
 
@@ -627,8 +639,9 @@ def filter_high_confidence(results: List[dict], min_score: float = 0.7) -> List[
            if isinstance(result, dict) and result.get("confidence_score", 0.0) >= min_score]
 
 
-# Global instance for type-safe extraction (used by various methods)
-fact_extractor = FactExtractor()
+# NOTE (LOW): the module-level FactExtractor instance was never referenced by
+# any code path; verify_search_results creates its own local instance at call
+# time. Removed to avoid confusion about which instance is canonical.
 
 
 class AnalysisReport:
@@ -638,15 +651,34 @@ class AnalysisReport:
         self.report = report_dict
         self.target_name = report_dict.get('target', 'Unknown Target')
         raw_facts = report_dict.get('verified_results', [])
-        self.facts = [
-            f.__dict__ if hasattr(f, '__dict__') else f 
-            for f in raw_facts
-        ]
+        self.facts = []
+        for f in raw_facts:
+            raw = f.__dict__ if hasattr(f, '__dict__') else f
+            if isinstance(raw, dict):
+                text = raw.get('text', '')
+                if ':' in text:
+                    parts = text.split(':', 1)
+                    fact_type = parts[0].strip().upper().replace(' ', '_')
+                    fact_value = parts[1].strip()
+                else:
+                    fact_type = 'FINDING'
+                    fact_value = text
+                source_str = raw.get('source', '')
+                self.facts.append({
+                    'type': fact_type,
+                    'value': fact_value,
+                    'confidence': raw.get('confidence_score', raw.get('confidence', 0.5)),
+                    'sources': [source_str] if isinstance(source_str, str) else list(source_str),
+                    'is_verified': raw.get('is_verified', False),
+                    'cross_references': raw.get('cross_references', []),
+                    'metadata': raw.get('metadata', {})
+                })
+            else:
+                self.facts.append(raw)
         # Additional attributes expected by tests
         self.verified_entities = report_dict.get('verified_entities', [])
         self.conflicts = report_dict.get('conflicts', [])
 
-@staticmethod
 def analyze_osint_data(harvest_output, privacy_mode: str = 'public'):
     """
     Bridge function for main.py to execute the ANALYST stage.

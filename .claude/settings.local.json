@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) or print\\(f''{f}: OK''\\) for f in [''osint_analyst_stage.py'',''osint_scribe_stage.py'',''osint_kanban_manager.py'']]\")",
+      "Bash(python -c \":*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''c:/AI_Agent/pd_integration.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''pd_integration.py: OK''\\)\")"
+    ]
+  }
+}

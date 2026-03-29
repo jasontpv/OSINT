@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(python -m pytest -q)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python -m pytest tests/test_recon_stage.py::TestReconStage::test_generate_queries_valid_input tests/test_harvesting_stage.py::TestHarvestingStage::test_rate_limit_handling -q --tb=short)",
+      "Bash(python -m pytest tests/test_publicdata_api.py::TestSearchExecution::test_successful_search -q --tb=short)"
+    ]
+  }
+}

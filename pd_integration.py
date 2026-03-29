@@ -4,10 +4,12 @@ import asyncio, aiohttp, xml.etree.ElementTree as ET, os
 BASE_URL   = "https://api.publicdata.com"
 SEARCH_ENDPOINT = "/pdsearchdocs.php"
 
-USERNAME  = "MaDMaX828"
-PASSWORD  = "RE98N7"
-DATABASE_ID = 1          # e.g. “PublicData” database
-QUERY_TERM  = "Braden Leeds"
+# BUGFIX: credentials must never be hard-coded in source. Load from environment
+# variables (set in .env or the shell) so they are not committed to version control.
+USERNAME    = os.getenv("PUBLICDATA_USERNAME", "")
+PASSWORD    = os.getenv("PUBLICDATA_PASSWORD", "")
+DATABASE_ID = int(os.getenv("PUBLICDATA_DATABASE_ID", "1"))
+QUERY_TERM  = os.getenv("PUBLICDATA_QUERY_TERM", "Braden Leeds")
 
 MAX_RETRY_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 2
@@ -18,7 +20,8 @@ async def authenticate(session):
     auth_url = f"{BASE_URL}/authenticate.php"
     data = {"username": USERNAME, "password": PASSWORD}
     try:
-        async with session.post(auth_url, data=data, timeout=30) as resp:
+        # BUGFIX: aiohttp requires ClientTimeout, not a bare int; bare int raises ValueError.
+        async with session.post(auth_url, data=data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             if resp.status != 200:
                 print(f"[ERROR] Authentication failed with status {resp.status}")
                 return None
@@ -46,41 +49,66 @@ async def do_search(session, token):
     headers = {"Authorization": f"Bearer {token}"}
 
     all_records = []
-
+    page_count = 0
+    
+    print(f"[DEBUG] Starting search for '{QUERY_TERM}'")
+    
     while True:
+        page_count += 1
+        # BUGFIX: same as authenticate — must use ClientTimeout, not bare int.
         async with session.get(url, params=params, headers=headers,
-                               timeout=30) as resp:
+                               timeout=aiohttp.ClientTimeout(total=30)) as resp:
             raw = await resp.text()
 
             # ---- sanity check ----
             if not raw.lstrip().startswith("<"):
-                print("⚠️  Received non‑XML response")
+                print(f"[ERROR] Page {page_count}: Received non‑XML response (status {resp.status})")
+                print(f"Response preview: {raw[:200]}")
                 break
 
             try:
                 tree = ET.fromstring(raw)
             except ET.ParseError as e:
-                print(f"⚠️  XML parse error: {e}")
+                print(f"[ERROR] Page {page_count}: XML parse error: {e}")
+                print(f"Raw content: {raw[:500]}")
                 break
 
             records = tree.findall(".//record")
+            page_record_count = len(records)
+            
             if not records:
+                print(f"[INFO] Page {page_count}: No more records found, stopping pagination")
                 # no more data
                 break
 
+            print(f"[DEBUG] Page {page_count}: Retrieved {page_record_count} records")
+            
             for r in records:
                 title   = r.findtext("title", "")
                 link    = r.findtext("link", "")
                 snippet = r.findtext("snippet", "")
+                
+                # Validate required fields
+                if not title and not link:
+                    print(f"[WARNING] Skipping malformed record")
+                    continue
+                    
                 all_records.append({"title": title, "link": link,
                                    "snippet": snippet})
 
             # ----- pagination -----
             next_rec = tree.findtext(".//next_record")
             if next_rec is None:
+                print("[INFO] No 'next_record' element found, stopping pagination")
                 break
             params["rec"] = int(next_rec)
+            
+            # Safety limit to prevent infinite loops
+            if page_count > 10:
+                print("[WARNING] Reached maximum page count (10), stopping pagination")
+                break
 
+    print(f"[INFO] Search complete. Total records retrieved: {len(all_records)}")
     return all_records
 
 def report(records):
