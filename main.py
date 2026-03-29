@@ -2,6 +2,7 @@
 """
 OSINT Kanban Pipeline - Main Entry Point
 =========================================
+Version: 1.5
 
 Multi-stage OSINT investigation tool: RECON → HARVESTING → ANALYST → SCRIBE
 
@@ -251,39 +252,40 @@ Required environment variables (.env):
     # BUGFIX: added --target as an alternative way to pass the query string,
     # matching the README example `python main.py --target "Matthew Pumphrey"`.
     parser.add_argument(
-        '--target',
+        '--target', '-q',
         default=None,
         metavar='QUERY',
         help='Target query (alternative to positional argument)',
     )
 
+    # Added -t alias for --target-type
     parser.add_argument(
-        '--target-type',
+        '--target-type', '-t',
         default='person',
         choices=['person', 'company', 'domain', 'product'],
         help='Entity type being investigated (default: person)',
     )
 
-    # BUGFIX: added --wip-limit flag (README "WIP Limits" section)
+    # BUGFIX: added --wip-limit flag (README "WIP Limits" section); added -w alias
     parser.add_argument(
-        '--wip-limit',
+        '--wip-limit', '-w',
         type=int,
         default=5,
         metavar='N',
         help='Work-in-progress limit per Kanban column (default: 5)',
     )
 
-    # BUGFIX: added --format flag to control report output format
+    # BUGFIX: added --format flag to control report output format; added -f alias
     parser.add_argument(
-        '--format',
+        '--format', '-f',
         default='both',
         choices=['pdf', 'html', 'both'],
         help='Report output format (default: both)',
     )
 
-    # BUGFIX: added --output flag for custom report directory
+    # BUGFIX: added --output flag for custom report directory; added -o alias
     parser.add_argument(
-        '--output',
+        '--output', '-o',
         default='./reports',
         metavar='PATH',
         help='Output directory for reports (default: ./reports)',
