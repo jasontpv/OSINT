@@ -135,7 +135,7 @@ class TestApiKeyValidation:
         """Instantiate OSINTPipeline with a patched environment."""
         base = {
             'SERPER_API_KEY': 'valid_serper_key',
-            'SCRAPEANT_API_KEY': 'valid_scrapeant_key',
+            'SCRAPINGANT_API_KEY': 'valid_scrapeant_key',
         }
         base.update(env_overrides)
         # Remove keys explicitly set to None
@@ -144,7 +144,7 @@ class TestApiKeyValidation:
         from main import OSINTPipeline
         with patch.dict(os.environ, env, clear=False):
             # Clear the two required keys from environ first to avoid bleed-through
-            for k in ('SERPER_API_KEY', 'SCRAPEANT_API_KEY'):
+            for k in ('SERPER_API_KEY', 'SCRAPINGANT_API_KEY'):
                 os.environ.pop(k, None)
             os.environ.update(env)
             return OSINTPipeline()
@@ -153,34 +153,34 @@ class TestApiKeyValidation:
         from main import OSINTPipeline
         with patch.dict(os.environ, {
             'SERPER_API_KEY': 'abc123',
-            'SCRAPEANT_API_KEY': 'def456',
+            'SCRAPINGANT_API_KEY': 'def456',
         }, clear=False):
             p = OSINTPipeline()
             assert p.api_keys['serper'] == 'abc123'
 
     def test_missing_serper_raises(self):
         from main import OSINTPipeline
-        env = {'SERPER_API_KEY': '', 'SCRAPEANT_API_KEY': 'valid'}
+        env = {'SERPER_API_KEY': '', 'SCRAPINGANT_API_KEY': 'valid'}
         with patch.dict(os.environ, env, clear=False):
             os.environ['SERPER_API_KEY'] = ''
             with pytest.raises(ValueError, match='SERPER_API_KEY'):
                 OSINTPipeline()
 
-    def test_missing_scrapeant_raises(self):
+    def test_missing_scrapingant_raises(self):
         from main import OSINTPipeline
         with patch.dict(os.environ, {
             'SERPER_API_KEY': 'valid',
-            'SCRAPEANT_API_KEY': '',
+            'SCRAPINGANT_API_KEY': '',
         }, clear=False):
-            os.environ['SCRAPEANT_API_KEY'] = ''
-            with pytest.raises(ValueError, match='SCRAPEANT_API_KEY'):
+            os.environ['SCRAPINGANT_API_KEY'] = ''
+            with pytest.raises(ValueError, match='SCRAPINGANT_API_KEY'):
                 OSINTPipeline()
 
     def test_placeholder_serper_raises(self):
         from main import OSINTPipeline
         with patch.dict(os.environ, {
             'SERPER_API_KEY': 'YOUR_SERPER_API_KEY',
-            'SCRAPEANT_API_KEY': 'real_key',
+            'SCRAPINGANT_API_KEY': 'real_key',
         }, clear=False):
             with pytest.raises(ValueError, match='SERPER_API_KEY'):
                 OSINTPipeline()
@@ -188,10 +188,10 @@ class TestApiKeyValidation:
     def test_public_mode_missing_keys_no_raise(self):
         """--privacy public must NOT raise even when both keys are missing."""
         from main import OSINTPipeline
-        env = {'SERPER_API_KEY': '', 'SCRAPEANT_API_KEY': ''}
+        env = {'SERPER_API_KEY': '', 'SCRAPINGANT_API_KEY': ''}
         with patch.dict(os.environ, env, clear=False):
             os.environ['SERPER_API_KEY'] = ''
-            os.environ['SCRAPEANT_API_KEY'] = ''
+            os.environ['SCRAPINGANT_API_KEY'] = ''
             # Should complete without raising
             p = OSINTPipeline(privacy_mode='public')
             assert p.privacy_mode == 'public'
@@ -201,7 +201,7 @@ class TestApiKeyValidation:
         from main import OSINTPipeline
         with patch.dict(os.environ, {
             'SERPER_API_KEY': '',
-            'SCRAPEANT_API_KEY': 'valid',
+            'SCRAPINGANT_API_KEY': 'valid',
         }, clear=False):
             os.environ['SERPER_API_KEY'] = ''
             with pytest.raises(ValueError, match='SERPER_API_KEY'):
@@ -212,10 +212,10 @@ class TestApiKeyValidation:
         from main import OSINTPipeline
         with patch.dict(os.environ, {
             'SERPER_API_KEY': 'valid',
-            'SCRAPEANT_API_KEY': '',
+            'SCRAPINGANT_API_KEY': '',
         }, clear=False):
-            os.environ['SCRAPEANT_API_KEY'] = ''
-            with pytest.raises(ValueError, match='SCRAPEANT_API_KEY'):
+            os.environ['SCRAPINGANT_API_KEY'] = ''
+            with pytest.raises(ValueError, match='SCRAPINGANT_API_KEY'):
                 OSINTPipeline(privacy_mode='hybrid')
 
     def test_privacy_mode_stored_on_instance(self):
@@ -223,7 +223,7 @@ class TestApiKeyValidation:
         from main import OSINTPipeline
         with patch.dict(os.environ, {
             'SERPER_API_KEY': 'key1',
-            'SCRAPEANT_API_KEY': 'key2',
+            'SCRAPINGANT_API_KEY': 'key2',
         }, clear=False):
             p = OSINTPipeline(privacy_mode='private')
             assert p.privacy_mode == 'private'

@@ -287,7 +287,7 @@ class ScrapingantClientV2:
         self.rate_limiter = RateLimiter(rate=5.0)
         self.circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_time=60)
         
-        if not api_key or api_key == "YOUR_SCRAPEANT_API_KEY":
+        if not api_key or api_key == "YOUR_SCRAPINGANT_API_KEY":
             raise ValueError("ScrapingAnt v2 API key is required and valid")
     
     async def scrape_url(self, url: str) -> Dict[str, Any]:
@@ -644,7 +644,7 @@ Expected response format:
 }
 
 SCRAPEANT V2 API TEST (curl):
-curl -X GET "https://api.scrapingant.com/v2/text?url=https://example.com&api_key=YOUR_SCRAPEANT_API_KEY"
+curl -X GET "https://api.scrapingant.com/v2/text?url=https://example.com&api_key=YOUR_SCRAPINGANT_API_KEY"
 
 Expected response: Plain text content of the page
 
@@ -658,7 +658,7 @@ if __name__ == "__main__":
     async def run_test():
         try:
             serper_key = os.getenv("SERPER_API_KEY", "YOUR_SERPER_API_KEY")
-            scrapeant_key = os.getenv("SCRAPEANT_API_KEY", "YOUR_SCRAPEANT_API_KEY")
+            scrapeant_key = os.getenv("SCRAPINGANT_API_KEY", "YOUR_SCRAPINGANT_API_KEY")
             
             if serper_key == "YOUR_SERPER_API_KEY":
                 print("⚠️ Please set SERPER_API_KEY in .env file")

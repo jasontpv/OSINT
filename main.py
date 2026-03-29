@@ -68,10 +68,10 @@ logger = logging.getLogger('OSINT_MAIN')
 # Placeholder values that count as "not configured"
 _PLACEHOLDER_KEYS = {
     "YOUR_SERPER_API_KEY",
-    "YOUR_SCRAPEANT_API_KEY",
+    "YOUR_SCRAPINGANT_API_KEY",
     "YOUR_LEAK_LOOKUP_API_KEY",
     "your_serper_api_key",
-    "your_scrapeant_api_key",
+    "your_scrapingant_api_key",
 }
 
 
@@ -88,7 +88,7 @@ class OSINTPipeline:
         self.privacy_mode = privacy_mode
         self.api_keys = {
             'serper':     os.getenv("SERPER_API_KEY"),
-            'scrapingant': os.getenv("SCRAPEANT_API_KEY"),
+            'scrapingant': os.getenv("SCRAPINGANT_API_KEY"),
             'leak_lookup': os.getenv("LEAK_LOOKUP_API_KEY"),
         }
         self._validate_api_keys()
@@ -109,14 +109,12 @@ class OSINTPipeline:
 
         scrapeant_key = self.api_keys['scrapingant']
         if not scrapeant_key or scrapeant_key in _PLACEHOLDER_KEYS:
-            missing.append("SCRAPEANT_API_KEY")
+            missing.append("SCRAPINGANT_API_KEY")
 
         # Warn about common typo variants present in env
         all_env = list(os.environ.keys())
         if 'SERPER_KEY' in all_env and 'SERPER_API_KEY' not in all_env:
             logger.warning("Found SERPER_KEY in environment — the required name is SERPER_API_KEY")
-        if 'SCRAPINGANT_API_KEY' in all_env and 'SCRAPEANT_API_KEY' not in all_env:
-            logger.warning("Found SCRAPINGANT_API_KEY — the required name is SCRAPEANT_API_KEY (no 'ING')")
 
         if missing:
             if self.privacy_mode == "public":
@@ -131,7 +129,7 @@ class OSINTPipeline:
                     f"Missing required API keys: {', '.join(missing)}\n"
                     f"Add them to your .env file or environment:\n"
                     f"  SERPER_API_KEY=<your Serper.dev key>\n"
-                    f"  SCRAPEANT_API_KEY=<your ScrapingAnt v2 key>\n"
+                    f"  SCRAPINGANT_API_KEY=<your ScrapingAnt v2 key>\n"
                     f"  LEAK_LOOKUP_API_KEY=<optional>\n"
                 )
 
@@ -333,7 +331,7 @@ Examples:
 
 Required environment variables (.env):
   SERPER_API_KEY      — Google search via Serper.dev
-  SCRAPEANT_API_KEY   — Web scraping via ScrapingAnt v2
+  SCRAPINGANT_API_KEY   — Web scraping via ScrapingAnt v2
   LEAK_LOOKUP_API_KEY — (optional) breach database lookup
         """,
     )

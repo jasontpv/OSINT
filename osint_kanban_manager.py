@@ -402,7 +402,7 @@ class OSINTKanbanManager:
         
         try:
             serper_key = self.config.serper_api_key or os.getenv("SERPER_API_KEY", "YOUR_SERPER_API_KEY")
-            scrapeant_key = self.config.scrapingant_api_key or os.getenv("SCRAPEANT_API_KEY", "YOUR_SCRAPEANT_API_KEY")
+            scrapeant_key = self.config.scrapingant_api_key or os.getenv("SCRAPINGANT_API_KEY", "YOUR_SCRAPINGANT_API_KEY")
             leak_lookup_key = self.config.leak_lookup_api_key or os.getenv("LEAK_LOOKUP_API_KEY")
             
             # FIX: Execute the harvest with proper API keys and get parsed JSON results
@@ -755,7 +755,7 @@ async def run_pipeline(query: str, target_type: str = "person"):
         query=query,
         target_name=target_type,
         serper_api_key=os.getenv("SERPER_API_KEY"),
-        scrapingant_api_key=os.getenv("SCRAPEANT_API_KEY"),
+        scrapingant_api_key=os.getenv("SCRAPINGANT_API_KEY"),
         leak_lookup_api_key=os.getenv("LEAK_LOOKUP_API_KEY")
     )
     

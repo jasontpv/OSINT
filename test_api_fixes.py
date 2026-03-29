@@ -87,10 +87,10 @@ async def test_scrapingant_v2_api():
     try:
         from osint_harvesting_stage import ScrapingantClientV2
         
-        scrapeant_key = os.getenv("SCRAPEANT_API_KEY", "1874016287e24f4b9df2aba5446581ba")
+        scrapeant_key = os.getenv("SCRAPINGANT_API_KEY", "1874016287e24f4b9df2aba5446581ba")
         
         if not scrapeant_key or scrapeant_key == "1874016287e24f4b9df2aba5446581ba":
-            print("⚠️  SKIPPED: SCRAPEANT_API_KEY not configured in .env file")
+            print("⚠️  SKIPPED: SCRAPINGANT_API_KEY not configured in .env file")
             return False
         
         client = ScrapingantClientV2(scrapeant_key)
@@ -392,7 +392,7 @@ SERPER.API TEST:
     -d '{"q": "test@example.com", "num": 5}'
 
 SCRAPEANT V2 TEST:
-  curl -X GET "https://api.scrapingant.com/v2/text?url=https://example.com&api_key=YOUR_SCRAPEANT_API_KEY"
+  curl -X GET "https://api.scrapingant.com/v2/text?url=https://example.com&api_key=YOUR_SCRAPINGANT_API_KEY"
 
 LEAK-LOOKUP TEST:
   python -c "from osint_connector.leak_lookup import search_leak_lookup; print(search_leak_lookup('test@example.com', 'YOUR_KEY'))"
