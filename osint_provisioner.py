@@ -99,7 +99,21 @@ class GitRepositoryCloner:
                 )
 
             if os.path.exists(clone_path):
-                print(f"⚠️ Repository already exists at {clone_path}")
+                # Pull latest changes instead of just returning stale clone
+                print(f"📥 Repository exists at {clone_path} — pulling latest …")
+                try:
+                    pull = subprocess.run(
+                        ["git", "pull", "--ff-only"],
+                        capture_output=True, text=True,
+                        cwd=clone_path, timeout=120,
+                    )
+                    if pull.returncode == 0:
+                        print(f"✅ Updated {repo_name}")
+                    else:
+                        print(f"⚠️ git pull failed (non-fatal): {pull.stderr.strip()}")
+                except Exception as pull_err:
+                    print(f"⚠️ Could not pull {repo_name}: {pull_err}")
+
                 return CloneResult(
                     success=True, repo_name=repo_name, local_path=clone_path,
                     git_branch="existing", remote_url=github_url,
@@ -375,8 +389,90 @@ class ToolProvisioner:
             if req_file and venv_p:
                 install_result = self.installer.install_dependencies(clone_result.local_path, req_file, venv_p)
 
+        # Step 4: Auto-register the tool in ToolRegistry + persist binary path
+        if clone_result.success:
+            self._auto_register_tool(clone_result, install_result)
+
         total_time = (datetime.now() - start_time).total_seconds()
         return ProvisioningReport(clone_result, install_result, is_safe, total_time)
+
+    # ------------------------------------------------------------------
+    #  Auto-registration helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_binary(clone_path: str, repo_name: str) -> Optional[str]:
+        """Heuristic: find an executable with the repo name inside the clone."""
+        candidates = [
+            Path(clone_path) / repo_name,
+            Path(clone_path) / "bin" / repo_name,
+            Path(clone_path) / f"{repo_name}.py",
+        ]
+        # Also check for a main.py that might be the entry-point
+        candidates.append(Path(clone_path) / "main.py")
+
+        for c in candidates:
+            if c.exists():
+                return str(c.resolve())
+
+        # Fallback: search shutil.which (tool may already be on PATH)
+        found = shutil.which(repo_name)
+        return found
+
+    @staticmethod
+    def _build_command_template(binary_path: str, repo_name: str,
+                                venv_path: Optional[str] = None) -> str:
+        """Build a command_template string suitable for ToolRegistry."""
+        bp = Path(binary_path)
+        if bp.suffix == ".py":
+            python = "python"
+            if venv_path:
+                if sys.platform == "win32":
+                    python = str(Path(venv_path) / "Scripts" / "python.exe")
+                else:
+                    python = str(Path(venv_path) / "bin" / "python")
+            return f"{python} {binary_path} {{target}}"
+        return f"{binary_path} {{target}}"
+
+    def _auto_register_tool(self, clone: "CloneResult",
+                            install: Optional["InstallationResult"]) -> None:
+        """Register the provisioned tool in ToolRegistry and persist its binary path."""
+        tool_name = clone.repo_name.lower()
+        binary = self._detect_binary(clone.local_path, clone.repo_name)
+        if not binary:
+            print(f"⚠️ Could not detect binary for {clone.repo_name}; skipping auto-register")
+            return
+
+        venv_path = install.virtual_env_path if install and install.success else None
+        cmd_template = self._build_command_template(binary, clone.repo_name, venv_path)
+
+        # --- write into ToolRegistry (in-memory, immediate) ---
+        try:
+            from osint_cli_wrapper import ToolRegistry
+            if tool_name not in ToolRegistry.TOOLS:
+                ToolRegistry.TOOLS[tool_name] = {
+                    "command_template": cmd_template,
+                    "description": f"{clone.repo_name} — auto-provisioned from {clone.remote_url}",
+                    "required_api_key": None,
+                }
+                print(f"✅ Registered '{tool_name}' in ToolRegistry")
+            else:
+                # Update the command template in case the path changed
+                ToolRegistry.TOOLS[tool_name]["command_template"] = cmd_template
+                print(f"✅ Updated '{tool_name}' command in ToolRegistry")
+        except ImportError:
+            print("⚠️ osint_cli_wrapper not importable; ToolRegistry not updated")
+
+        # --- persist binary path in ~/.cli_tools.json ---
+        try:
+            from state_storage import load_json, save_json
+            cli_map_path = str(Path.home() / ".cli_tools.json")
+            tool_map = load_json(cli_map_path)
+            tool_map[tool_name] = binary
+            save_json(cli_map_path, tool_map)
+            print(f"✅ Persisted '{tool_name}' → {binary} in ~/.cli_tools.json")
+        except Exception as persist_err:
+            print(f"⚠️ Could not persist binary path: {persist_err}")
 
 
 if __name__ == "__main__":

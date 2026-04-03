@@ -131,10 +131,19 @@ class CLICommandRunner:
             if not binary or not Path(binary).exists():
                 binary = shutil.which(tool)
 
-            # 3. If still not found, try ToolProvisioner
+            # 3. If still not found, prompt user then provision via ToolProvisioner
             if not binary:
                 repo_url = repos.get(tool)
                 if repo_url:
+                    try:
+                        choice = input(f"Install {tool} from its GitHub repo? (y/n) ").strip().lower()
+                    except EOFError:
+                        choice = "n"
+
+                    if choice != "y":
+                        print(f"⚠️ User declined install of '{tool}'; skipping.")
+                        continue
+
                     try:
                         from osint_provisioner import ToolProvisioner
                         prov = ToolProvisioner(workspace_root=self.workspace_dir)
@@ -142,11 +151,17 @@ class CLICommandRunner:
                             repo_url, install_dependencies=True, security_check=False
                         )
                         if report.repo_cloned.success:
-                            candidate = Path(report.repo_cloned.local_path) / tool
-                            if not candidate.exists():
-                                candidate = Path(report.repo_cloned.local_path) / "bin" / tool
-                            if candidate.exists():
-                                binary = str(candidate.resolve())
+                            # Reload persisted map — provisioner writes ~/.cli_tools.json
+                            self._load_tool_map()
+                            binary = self.tool_binaries.get(tool)
+
+                            # Fallback: search the clone dir manually
+                            if not binary:
+                                candidate = Path(report.repo_cloned.local_path) / tool
+                                if not candidate.exists():
+                                    candidate = Path(report.repo_cloned.local_path) / "bin" / tool
+                                if candidate.exists():
+                                    binary = str(candidate.resolve())
                     except Exception as prov_err:
                         print(f"⚠️ ToolProvisioner failed for {tool}: {prov_err}")
 
@@ -463,13 +478,18 @@ class CLIWrapper:
                 timestamp=datetime.now()
             )
 
-        # 1. Resolve absolute binary path (if we have it)
-        binary_path = self._find_binary_path(tool_name)
-
+        # 1. Resolve absolute binary path — check runner's persisted map first,
+        #    then fall back to shutil.which
+        binary_path = self.runner.tool_binaries.get(tool_name)
+        if binary_path and not Path(binary_path).exists():
+            binary_path = None
         if not binary_path:
-            # Tool unknown → ask user
+            binary_path = shutil.which(tool_name)
+
+        # 2. Still missing → ask the user whether to install
+        if not binary_path:
             print(f"🔧 Tool <{tool_name}> not found locally.")
-            choice = input("Install this tool from its GitHub repo? (y/n) ").strip().lower()
+            choice = input(f"Install {tool_name} from its GitHub repo? (y/n) ").strip().lower()
             if choice != 'y':
                 return ProcessResult(command="",
                                       exit_code=1,
@@ -478,13 +498,7 @@ class CLIWrapper:
                                       duration_seconds=0.0,
                                       timestamp=datetime.now())
 
-            # Look up the repo URL – we keep a simple dict for now
-            TOOL_REPOS = {
-                "whois": "https://github.com/rfc1036/whois.git",
-                "nmap":  "https://github.com/nmap/nmap.git",
-            }
-
-            repo_url = TOOL_REPOS.get(tool_name)
+            repo_url = self._resolve_repo_url(tool_name)
             if not repo_url:
                 return ProcessResult(command="",
                                       exit_code=1,
@@ -493,9 +507,9 @@ class CLIWrapper:
                                       duration_seconds=0.0,
                                       timestamp=datetime.now())
 
-            # Call the provisioner
+            # Provision — this also auto-registers into ToolRegistry + ~/.cli_tools.json
             from osint_provisioner import ToolProvisioner
-            prov = ToolProvisioner(workspace_root="./OSINT_WORKSPACE")
+            prov = ToolProvisioner(workspace_root=self.runner.workspace_dir)
             report = prov.provision_tool_from_github(repo_url,
                                                       install_dependencies=True,
                                                       security_check=False)
@@ -508,35 +522,34 @@ class CLIWrapper:
                                       duration_seconds=0.0,
                                       timestamp=datetime.now())
 
-            # After a successful provision we need the path of the binary.
-            # The provisioner returns `clone_result.local_path` – inside that folder
-            # we look for an executable with the same name as the tool (case‑insensitive).
-            possible_bin = Path(report.repo_cloned.local_path) / tool_name
-            if not possible_bin.exists():
-                # maybe it is in a bin/ subfolder
-                possible_bin = Path(report.repo_cloned.local_path) / "bin" / tool_name
+            # Binary should now be in the runner's map (written by provisioner)
+            self.runner._load_tool_map()
+            binary_path = self.runner.tool_binaries.get(tool_name)
 
-            binary_path = str(possible_bin.resolve())
-            if not os.path.isfile(binary_path):
+            # Fallback: search the clone directory manually
+            if not binary_path:
+                binary_path = ToolProvisioner._detect_binary(
+                    report.repo_cloned.local_path, report.repo_cloned.repo_name
+                )
+
+            if not binary_path:
                 return ProcessResult(command="",
                                       exit_code=1,
                                       stdout="",
-                                      stderr=f"Could not locate binary {tool_name} after provision.",
+                                      stderr=f"Could not locate binary for {tool_name} after provision.",
                                       duration_seconds=0.0,
                                       timestamp=datetime.now())
 
-            # Persist the mapping for future runs
-            self.tool_binaries[tool_name] = binary_path
-            self._save_tool_map()
+            # Persist in runner's map for future runs
+            self.runner.tool_binaries[tool_name] = binary_path
+            self.runner._save_tool_map()
 
-        # 2. Build the actual command – use the absolute path now
-        actual_command = tool_config['command_template'].replace("{target}", target)
-        actual_command = actual_command.replace(tool_name, binary_path)   # simple placeholder
+        # 3. Refresh tool_config — provisioner may have updated the registry
+        tool_config = ToolRegistry.get_tool_config(tool_name) or tool_config
 
-        # Check for required API key
+        # 4. Check for required API key
         if tool_config.get('required_api_key'):
             api_key = os.environ.get(tool_config['required_api_key'])
-
             if not api_key:
                 print(f"❌ Required API key missing: {tool_config['required_api_key']}")
                 return ProcessResult(
@@ -548,14 +561,23 @@ class CLIWrapper:
                     timestamp=datetime.now()
                 )
 
-        # Execute the command using actual subprocess logic
+        # 5. Execute the command
         result = self.runner.run_command(
             command_template=tool_config['command_template'],
             target_value=target,
-            timeout=timeout
+            timeout=timeout,
         )
-
         return result
+
+    @staticmethod
+    def _resolve_repo_url(tool_name: str) -> Optional[str]:
+        """Return the GitHub clone URL for a known tool, or None."""
+        _KNOWN_REPOS: Dict[str, str] = {
+            "whois":        "https://github.com/rfc1036/whois.git",
+            "nmap":         "https://github.com/nmap/nmap.git",
+            "theharvester": "https://github.com/laramies/theHarvester.git",
+        }
+        return _KNOWN_REPOS.get(tool_name.lower())
 
     def save_output_to_file(self, result: ProcessResult, output_dir: str) -> str:
         """Save CLI output to file for Analyst stage
