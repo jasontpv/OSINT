@@ -451,7 +451,7 @@ The binary will be provisioned on first use and its path cached in `~/.cli_tools
 
 ## 📄 License
 
-MIT License - See LICENSE file for details
+MYTHwORX License - See LICENSE file for details
 
 ## ⚠️ Disclaimer
 
