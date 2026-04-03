@@ -436,7 +436,8 @@ class ToolProvisioner:
 
     def _auto_register_tool(self, clone: "CloneResult",
                             install: Optional["InstallationResult"]) -> None:
-        """Register the provisioned tool in ToolRegistry and persist its binary path."""
+        """Register the provisioned tool in ToolRegistry — both in-memory AND
+        written to osint_cli_wrapper.py so it persists across restarts."""
         tool_name = clone.repo_name.lower()
         binary = self._detect_binary(clone.local_path, clone.repo_name)
         if not binary:
@@ -445,25 +446,24 @@ class ToolProvisioner:
 
         venv_path = install.virtual_env_path if install and install.success else None
         cmd_template = self._build_command_template(binary, clone.repo_name, venv_path)
+        description = f"{clone.repo_name} — auto-provisioned from {clone.remote_url}"
 
-        # --- write into ToolRegistry (in-memory, immediate) ---
+        # --- 1. In-memory update (immediate, current process) ---
         try:
             from osint_cli_wrapper import ToolRegistry
             if tool_name not in ToolRegistry.TOOLS:
                 ToolRegistry.TOOLS[tool_name] = {
                     "command_template": cmd_template,
-                    "description": f"{clone.repo_name} — auto-provisioned from {clone.remote_url}",
+                    "description": description,
                     "required_api_key": None,
                 }
-                print(f"✅ Registered '{tool_name}' in ToolRegistry")
-            else:
-                # Update the command template in case the path changed
-                ToolRegistry.TOOLS[tool_name]["command_template"] = cmd_template
-                print(f"✅ Updated '{tool_name}' command in ToolRegistry")
         except ImportError:
-            print("⚠️ osint_cli_wrapper not importable; ToolRegistry not updated")
+            pass
 
-        # --- persist binary path in ~/.cli_tools.json ---
+        # --- 2. Write into osint_cli_wrapper.py on disk (persistent) ---
+        self._write_tool_to_registry_file(tool_name, cmd_template, description)
+
+        # --- 3. Persist binary path in ~/.cli_tools.json ---
         try:
             from state_storage import load_json, save_json
             cli_map_path = str(Path.home() / ".cli_tools.json")
@@ -473,6 +473,87 @@ class ToolProvisioner:
             print(f"✅ Persisted '{tool_name}' → {binary} in ~/.cli_tools.json")
         except Exception as persist_err:
             print(f"⚠️ Could not persist binary path: {persist_err}")
+
+    @staticmethod
+    def _write_tool_to_registry_file(tool_name: str, cmd_template: str,
+                                      description: str) -> None:
+        """Physically insert a new TOOLS entry into osint_cli_wrapper.py.
+
+        Finds the closing brace of the TOOLS dict and inserts the new entry
+        just before it, matching the existing indentation style.
+        """
+        wrapper_path = Path(__file__).parent / "osint_cli_wrapper.py"
+        if not wrapper_path.exists():
+            print(f"⚠️ Cannot find {wrapper_path}; skipping file write")
+            return
+
+        try:
+            source = wrapper_path.read_text(encoding="utf-8")
+
+            # Check if tool already has an entry in the file
+            if f"'{tool_name}':" in source or f'"{tool_name}":' in source:
+                print(f"✅ '{tool_name}' already in osint_cli_wrapper.py TOOLS dict")
+                return
+
+            # Build the new entry block (matching existing style: 8-space indent)
+            # Escape any single quotes in the template/description
+            safe_cmd = cmd_template.replace("'", "\\'")
+            safe_desc = description.replace("'", "\\'")
+            new_entry = (
+                f"        '{tool_name}': {{\n"
+                f"            'command_template': '{safe_cmd}',\n"
+                f"            'description': '{safe_desc}',\n"
+                f"            'required_api_key': None\n"
+                f"        }},\n"
+            )
+
+            # Strategy: find the last tool entry's closing '},' and insert after it.
+            # We look for the pattern:  "        },\n    }\n" which is the end of
+            # the last dict entry followed by the closing brace of TOOLS.
+            #
+            # More robust: find "    TOOLS = {" then locate the matching closing "}".
+            marker = "    TOOLS = {"
+            start_idx = source.find(marker)
+            if start_idx == -1:
+                print("⚠️ Could not locate TOOLS dict in osint_cli_wrapper.py")
+                return
+
+            # Walk forward from the opening brace to find the matching closing brace.
+            # We track brace depth.
+            brace_start = source.index("{", start_idx)
+            depth = 0
+            closing_idx = -1
+            for i in range(brace_start, len(source)):
+                if source[i] == "{":
+                    depth += 1
+                elif source[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        closing_idx = i
+                        break
+
+            if closing_idx == -1:
+                print("⚠️ Could not find closing brace of TOOLS dict")
+                return
+
+            # Find the last '},' before closing_idx — that's the end of the last entry
+            last_entry_end = source.rfind("},", brace_start, closing_idx)
+            if last_entry_end == -1:
+                print("⚠️ Could not find last entry in TOOLS dict")
+                return
+
+            # Insert after the last entry's closing '},\n'
+            insert_pos = last_entry_end + 2  # after '},'
+            # Skip any whitespace/newline right after '},'
+            if insert_pos < len(source) and source[insert_pos] == "\n":
+                insert_pos += 1
+
+            new_source = source[:insert_pos] + new_entry + source[insert_pos:]
+            wrapper_path.write_text(new_source, encoding="utf-8")
+            print(f"✅ Wrote '{tool_name}' into osint_cli_wrapper.py TOOLS dict")
+
+        except Exception as write_err:
+            print(f"⚠️ Failed to write tool to registry file: {write_err}")
 
 
 if __name__ == "__main__":
