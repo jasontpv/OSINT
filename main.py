@@ -2,7 +2,7 @@
 """
 OSINT Kanban Pipeline - Main Entry Point
 =========================================
-Version: 1.5
+Version: 1.6
 
 Multi-stage OSINT investigation tool: RECON → HARVESTING → ANALYST → SCRIBE
 
