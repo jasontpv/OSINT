@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% set active_page = "reports" %}
+{% block title %}All Reports — OSINT Pipeline{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto space-y-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-2xl font-bold text-white">Reports</h2>
+            <p class="text-sm text-gray-400 mt-1">Browse all saved investigations</p>
+        </div>
+        <a href="/investigate" class="gradient-brand text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition">
+            New Investigation
+        </a>
+    </div>
+
+    <!-- Filters -->
+    <form method="GET" action="/reports" class="bg-gray-900 border border-gray-800 rounded-xl px-5 py-4 flex items-end gap-4 flex-wrap">
+        <div class="flex-1 min-w-[200px]">
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">Search</label>
+            <input type="text" name="search" value="{{ search }}" placeholder="Target name..."
+                class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-cyan">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">Type</label>
+            <select name="target_type" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-cyan">
+                <option value="">All</option>
+                <option value="person" {% if target_type == 'person' %}selected{% endif %}>Person</option>
+                <option value="company" {% if target_type == 'company' %}selected{% endif %}>Company</option>
+                <option value="group" {% if target_type == 'group' %}selected{% endif %}>Group</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">Status</label>
+            <select name="status" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-cyan">
+                <option value="">All</option>
+                <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>Completed</option>
+                <option value="running" {% if status_filter == 'running' %}selected{% endif %}>Running</option>
+                <option value="failed" {% if status_filter == 'failed' %}selected{% endif %}>Failed</option>
+            </select>
+        </div>
+        <button type="submit" class="px-4 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm text-white hover:bg-gray-700 transition">
+            Filter
+        </button>
+    </form>
+
+    <!-- Results -->
+    {% if investigations %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for inv in investigations %}
+        <a href="/reports/{{ inv.id }}" class="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition group block">
+            <div class="flex items-start justify-between">
+                <div class="w-10 h-10 rounded-lg gradient-brand flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                    {{ inv.target[0]|upper }}
+                </div>
+                {% if inv.status == 'completed' %}
+                <span class="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-900/50 text-emerald-400 border border-emerald-800">Done</span>
+                {% elif inv.status == 'running' %}
+                <span class="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-900/50 text-blue-400 border border-blue-800">Running</span>
+                {% elif inv.status == 'failed' %}
+                <span class="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-900/50 text-red-400 border border-red-800">Failed</span>
+                {% endif %}
+            </div>
+            <h3 class="text-sm font-semibold text-white mt-3 group-hover:text-brand-cyan transition truncate">{{ inv.target }}</h3>
+            <p class="text-xs text-gray-500 mt-1">{{ inv.target_type|capitalize }} &middot; {{ inv.created_at[:10] }}</p>
+            <div class="flex items-center gap-4 mt-3 pt-3 border-t border-gray-800">
+                <span class="text-xs text-gray-500">{{ inv.fact_count }} facts</span>
+                {% if inv.avg_confidence > 0 %}
+                <span class="text-xs {% if inv.avg_confidence >= 70 %}text-emerald-500{% elif inv.avg_confidence >= 40 %}text-amber-500{% else %}text-red-500{% endif %}">
+                    {{ inv.avg_confidence }}% avg conf
+                </span>
+                {% endif %}
+                {% if inv.cluster_count > 0 %}
+                <span class="text-xs text-purple-400">{{ inv.cluster_count }} cluster{{ 's' if inv.cluster_count != 1 }}</span>
+                {% endif %}
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+        <p class="text-gray-500">No investigations found matching your filters.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

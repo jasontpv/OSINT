@@ -303,7 +303,22 @@ class OSINTKanbanManager:
         
         # Performance monitoring
         self.monitor = PerformanceMonitor()
-    
+
+        # Reference to the most recently fully-processed ticket. Consumed by
+        # integrations (e.g. the web UI) that want access to analysis_results
+        # after execute_pipeline() returns, since columns are drained during
+        # processing.
+        self.last_ticket: Optional[OsintTicket] = None
+
+    async def cleanup(self):
+        """Release any resources held by the manager.
+
+        Currently a no-op because HTTP clients/DB handles are scoped per-request
+        inside the stage processors, but kept as a public contract so callers
+        (web UI, long-running daemons) can always call it without hasattr checks.
+        """
+        return None
+
     def get_circuit_breaker(self, stage: str) -> CircuitBreaker:
         """Get circuit breaker for a specific stage"""
         return self.circuit_breakers.get(stage, CircuitBreaker())
@@ -708,6 +723,10 @@ class OSINTKanbanManager:
                     else:
                         self.results.failed += 1
                     
+                    # Expose the completed ticket for downstream consumers
+                    # (e.g. the web UI pulls facts out of ticket.analysis_results).
+                    self.last_ticket = t
+
                     if t in self.columns["SCRIBE"].current_work_in_progress:
                         self.columns["SCRIBE"].current_work_in_progress.remove(t)
             

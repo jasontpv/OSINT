@@ -443,6 +443,81 @@ def generate_osint_queries(user_input: str) -> ReconOutput:
         raise
 
 
+# ── Pivot query builder ───────────────────────────────────────────────
+# Used by the web UI's identity-cluster triage view: given a set of facts
+# believed to belong to one identity, synthesise a single search query that
+# can be fed back into a fresh investigation to pivot onto related entities.
+
+# Fact types that uniquely identify a person/org and should be quoted verbatim
+_IDENTIFYING_FACT_TYPES = {
+    "email", "phone", "username", "handle", "social_handle",
+    "full_name", "name", "person_name", "company", "organization",
+    "ip_address", "domain", "hostname",
+}
+
+# Fact types that add too much noise if injected directly into a search
+_NOISY_FACT_TYPES = {"web_reference", "skill", "cli_result", "bio", "finding"}
+
+
+def build_pivot_query(facts: List[Dict]) -> Dict:
+    """Build a search query that pivots from a cluster of facts to related entities.
+
+    Args:
+        facts: list of fact dicts, each with at least ``value`` and ``fact_type``.
+               ``confidence`` (0-1 or 0-100) is used for ranking when present.
+
+    Returns:
+        Dict with keys:
+          - ``query``:   space-joined, quoted search string ready for a search engine
+          - ``terms``:   list of the raw term strings used in the query
+          - ``suggestions``: alternative single-term queries the UI can offer
+    """
+    if not facts:
+        return {"query": "", "terms": [], "suggestions": []}
+
+    def _conf(f: Dict) -> float:
+        c = f.get("confidence")
+        if c is None:
+            c = f.get("confidence_score", 0)
+        try:
+            c = float(c)
+        except (TypeError, ValueError):
+            return 0.0
+        return c * 100 if c <= 1.0 else c
+
+    ranked = sorted(facts, key=_conf, reverse=True)
+
+    terms: List[str] = []
+    seen = set()
+    for f in ranked:
+        value = (f.get("value") or "").strip()
+        ftype = (f.get("fact_type") or f.get("type") or "").lower()
+        if not value or len(value) < 3:
+            continue
+        if ftype in _NOISY_FACT_TYPES:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if ftype in _IDENTIFYING_FACT_TYPES or not terms:
+            terms.append(value)
+        if len(terms) >= 4:
+            break
+
+    if not terms:
+        for f in ranked[:3]:
+            value = (f.get("value") or "").strip()
+            if value and value.lower() not in seen:
+                seen.add(value.lower())
+                terms.append(value)
+
+    query = " ".join(f'"{t}"' if " " in t else t for t in terms)
+    suggestions = [f'"{t}"' if " " in t else t for t in terms]
+
+    return {"query": query, "terms": terms, "suggestions": suggestions}
+
+
 # Test the module if run directly
 if __name__ == "__main__":
     test_cases = [

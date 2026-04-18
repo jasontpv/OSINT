@@ -1,0 +1,22 @@
+# OSINT Kanban Pipeline — dependencies
+
+# Web UI (FastAPI)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+sse-starlette>=2.0
+python-multipart>=0.0.9
+jinja2>=3.1
+aiosqlite>=0.19
+
+# Shared / backend
+python-dotenv>=1.0
+aiohttp>=3.9
+requests>=2.31
+click>=8.1
+
+# Reporting (Scribe stage)
+reportlab>=4.0
+
+# Dev / tests
+pytest>=8.0
+pytest-asyncio>=0.23

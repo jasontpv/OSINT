@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% set active_page = "settings" %}
+{% block title %}Settings — OSINT Pipeline{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-8">
+    <div>
+        <h2 class="text-2xl font-bold text-white">Settings</h2>
+        <p class="text-sm text-gray-400 mt-1">Manage API keys and tool configuration</p>
+    </div>
+
+    <!-- Tool Status -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl">
+        <div class="px-5 py-4 border-b border-gray-800">
+            <h3 class="text-base font-semibold text-white">Tool Status</h3>
+        </div>
+        <div class="divide-y divide-gray-800">
+            {% for tool in tools %}
+            <div class="flex items-center justify-between px-5 py-3.5">
+                <div class="flex items-center gap-3">
+                    {% if tool.type == 'api' %}
+                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 border border-blue-800 font-medium">API</span>
+                    {% else %}
+                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700 font-medium">CLI</span>
+                    {% endif %}
+                    <span class="text-sm text-gray-200">{{ tool.name }}</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    {% if tool.key_masked %}
+                    <span class="text-xs text-gray-600 font-mono">{{ tool.key_masked }}</span>
+                    {% endif %}
+                    {% if tool.status == 'available' %}
+                    <span class="flex items-center gap-1.5 text-xs text-emerald-400">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                        Ready
+                    </span>
+                    {% else %}
+                    <span class="flex items-center gap-1.5 text-xs text-gray-500">
+                        <span class="w-2 h-2 rounded-full bg-gray-600"></span>
+                        Not configured
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- API Key Management -->
+    <form method="POST" action="/api/settings/keys" class="bg-gray-900 border border-gray-800 rounded-xl">
+        <div class="px-5 py-4 border-b border-gray-800">
+            <h3 class="text-base font-semibold text-white">API Keys</h3>
+            <p class="text-xs text-gray-500 mt-1">Update your API keys. Leave blank to keep the existing value.</p>
+        </div>
+        <div class="p-5 space-y-4">
+            {% for tool in tools %}
+            {% if tool.env_key %}
+            <div>
+                <label class="block text-xs font-medium text-gray-400 mb-1.5">{{ tool.name }} <span class="text-gray-600">({{ tool.env_key }})</span></label>
+                <input type="text" name="{{ tool.env_key }}" placeholder="Enter API key..."
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-cyan font-mono">
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        <div class="px-5 py-4 border-t border-gray-800">
+            <button type="submit" class="gradient-brand text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:opacity-90 transition">
+                Save Keys
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% set active_page = "dashboard" %}
+{% block title %}Dashboard — OSINT Pipeline{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto space-y-8">
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-2xl font-bold text-white">Dashboard</h2>
+            <p class="text-sm text-gray-400 mt-1">Overview of your OSINT investigations</p>
+        </div>
+        <a href="/investigate" class="gradient-brand text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:opacity-90 transition flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+            New Investigation
+        </a>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Total Investigations</p>
+            <p class="text-3xl font-bold text-white mt-2">{{ stats.total_investigations }}</p>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Completed</p>
+            <p class="text-3xl font-bold text-emerald-400 mt-2">{{ stats.completed_investigations }}</p>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Total Facts Found</p>
+            <p class="text-3xl font-bold text-brand-cyan mt-2">{{ stats.total_facts }}</p>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Avg Confidence</p>
+            <p class="text-3xl font-bold text-brand-purple mt-2">{{ stats.avg_confidence }}%</p>
+        </div>
+    </div>
+
+    <!-- Recent Investigations -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl">
+        <div class="px-5 py-4 border-b border-gray-800">
+            <h3 class="text-lg font-semibold text-white">Recent Investigations</h3>
+        </div>
+        {% if investigations %}
+        <div class="divide-y divide-gray-800">
+            {% for inv in investigations %}
+            <a href="/reports/{{ inv.id }}" class="flex items-center justify-between px-5 py-4 hover:bg-gray-800/50 transition group">
+                <div class="flex items-center gap-4">
+                    <div class="w-10 h-10 rounded-lg gradient-brand flex items-center justify-center text-white font-bold text-sm">
+                        {{ inv.target[0]|upper }}
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-white group-hover:text-brand-cyan transition">{{ inv.target }}</p>
+                        <p class="text-xs text-gray-500 mt-0.5">{{ inv.target_type|capitalize }} &middot; {{ inv.created_at[:16] }}</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span class="text-xs text-gray-500">{{ inv.fact_count }} facts</span>
+                    {% if inv.status == 'completed' %}
+                    <span class="px-2.5 py-1 text-xs font-medium rounded-full bg-emerald-900/50 text-emerald-400 border border-emerald-800">Completed</span>
+                    {% elif inv.status == 'running' %}
+                    <span class="px-2.5 py-1 text-xs font-medium rounded-full bg-blue-900/50 text-blue-400 border border-blue-800 animate-pulse-dot">Running</span>
+                    {% elif inv.status == 'failed' %}
+                    <span class="px-2.5 py-1 text-xs font-medium rounded-full bg-red-900/50 text-red-400 border border-red-800">Failed</span>
+                    {% else %}
+                    <span class="px-2.5 py-1 text-xs font-medium rounded-full bg-gray-800 text-gray-400 border border-gray-700">{{ inv.status|capitalize }}</span>
+                    {% endif %}
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="p-12 text-center">
+            <svg class="w-12 h-12 mx-auto text-gray-700" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>
+            <p class="text-gray-500 mt-4">No investigations yet</p>
+            <a href="/investigate" class="inline-block mt-4 text-sm text-brand-cyan hover:underline">Start your first investigation</a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

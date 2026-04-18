@@ -1,0 +1,700 @@
+{% extends "base.html" %}
+{% set active_page = "reports" %}
+{% block title %}Triage: {{ investigation.target }} — OSINT Pipeline{% endblock %}
+
+{% block content %}
+<div x-data="triageApp()" x-init="init()" class="max-w-7xl mx-auto space-y-5">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <a href="/reports/{{ investigation.id }}" class="text-xs text-gray-500 hover:text-gray-300 transition">&larr; Back to Report</a>
+            <h2 class="text-2xl font-bold text-white mt-1">Triage: {{ investigation.target }}</h2>
+            <p class="text-sm text-gray-400 mt-1">Group facts into identity clusters, then pivot for deeper investigation</p>
+        </div>
+        <button @click="showCreateModal = true"
+                class="gradient-brand text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+            New Cluster
+        </button>
+    </div>
+
+    <!-- Layout: Clusters (left) + Facts (right) -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+
+        <!-- Clusters Panel -->
+        <div class="lg:col-span-4 space-y-3">
+            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider px-1">Identity Clusters</h3>
+
+            <!-- Unclustered card (always first) -->
+            <div @click="selectView('unclustered')"
+                 :class="activeView === 'unclustered' ? 'border-brand-cyan ring-1 ring-brand-cyan/30' : 'border-gray-800 hover:border-gray-700'"
+                 class="bg-gray-900 border rounded-xl p-4 cursor-pointer transition">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-lg bg-gray-800 flex items-center justify-center">
+                            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 0 1 2.012 1.244l.256.512a2.25 2.25 0 0 0 2.013 1.244h3.218a2.25 2.25 0 0 0 2.013-1.244l.256-.512a2.25 2.25 0 0 1 2.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18v-4.162"/></svg>
+                        </div>
+                        <div>
+                            <p class="text-sm font-medium text-gray-300">Unclustered</p>
+                            <p class="text-xs text-gray-600"><span x-text="unclusteredFacts.length"></span> facts</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cluster cards -->
+            <template x-for="cluster in clusters" :key="cluster.id">
+                <div @click="selectView(cluster.id)"
+                     :class="activeView === cluster.id ? 'border-brand-cyan ring-1 ring-brand-cyan/30' : 'border-gray-800 hover:border-gray-700'"
+                     class="bg-gray-900 border rounded-xl p-4 cursor-pointer transition group">
+                    <div class="flex items-start justify-between">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-8 h-8 rounded-lg gradient-brand flex items-center justify-center text-white font-bold text-xs flex-shrink-0"
+                                 x-text="cluster.label.charAt(0).toUpperCase()"></div>
+                            <div class="min-w-0">
+                                <p class="text-sm font-medium text-white truncate" x-text="cluster.label"></p>
+                                <p class="text-xs text-gray-500">
+                                    <span x-text="cluster.fact_count"></span> facts &middot;
+                                    <span :class="cluster.avg_confidence >= 70 ? 'text-emerald-500' : cluster.avg_confidence >= 40 ? 'text-amber-500' : 'text-red-500'"
+                                          x-text="Math.round(cluster.avg_confidence) + '% avg'"></span>
+                                </p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition flex-shrink-0">
+                            <button @click.stop="openPivot(cluster)"
+                                    class="p-1.5 rounded-lg text-brand-cyan hover:bg-brand-cyan/10 transition" title="Pivot">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>
+                            </button>
+                            <button @click.stop="editCluster(cluster)"
+                                    class="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition" title="Edit">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Z"/></svg>
+                            </button>
+                            <button @click.stop="confirmDeleteCluster(cluster)"
+                                    class="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-900/20 transition" title="Delete">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <p x-show="cluster.notes" class="text-xs text-gray-600 mt-2 truncate" x-text="cluster.notes"></p>
+                </div>
+            </template>
+
+            <template x-if="clusters.length === 0">
+                <div class="bg-gray-900/50 border border-dashed border-gray-800 rounded-xl p-6 text-center">
+                    <p class="text-sm text-gray-600">No clusters yet. Select facts and create your first identity cluster.</p>
+                </div>
+            </template>
+        </div>
+
+        <!-- Facts Panel -->
+        <div class="lg:col-span-8 space-y-3">
+            <!-- Action bar -->
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div class="flex items-center gap-2">
+                    <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                        <span x-text="activeView === 'unclustered' ? 'Unclustered Facts' : activeView === 'all' ? 'All Facts' : 'Cluster: ' + (clusters.find(c => c.id === activeView)?.label || '')"></span>
+                    </h3>
+                    <!-- Type filter pills -->
+                    <div class="flex items-center gap-1 ml-3">
+                        <button @click="typeFilter = ''"
+                                :class="typeFilter === '' ? 'bg-brand-cyan/20 text-brand-cyan border-brand-cyan/30' : 'text-gray-500 border-gray-700 hover:border-gray-600'"
+                                class="px-2 py-0.5 rounded-full text-[10px] font-medium border transition">All</button>
+                        {% for ft in fact_types %}
+                        <button @click="typeFilter = '{{ ft }}'"
+                                :class="typeFilter === '{{ ft }}' ? 'bg-brand-cyan/20 text-brand-cyan border-brand-cyan/30' : 'text-gray-500 border-gray-700 hover:border-gray-600'"
+                                class="px-2 py-0.5 rounded-full text-[10px] font-medium border transition">{{ ft }}</button>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="flex items-center gap-2" x-show="selectedIds.length > 0">
+                    <span class="text-xs text-gray-500"><span x-text="selectedIds.length"></span> selected</span>
+                    <template x-if="clusters.length > 0">
+                        <select x-model="assignTarget"
+                                class="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-cyan">
+                            <option value="">Assign to...</option>
+                            <template x-for="c in clusters" :key="c.id">
+                                <option :value="c.id" x-text="c.label"></option>
+                            </template>
+                        </select>
+                    </template>
+                    <button @click="assignSelected()"
+                            x-show="assignTarget"
+                            class="px-3 py-1 rounded-lg bg-brand-cyan/20 text-brand-cyan text-xs font-medium hover:bg-brand-cyan/30 transition">
+                        Assign
+                    </button>
+                    <button @click="showCreateWithSelection = true; showCreateModal = true"
+                            class="px-3 py-1 rounded-lg border border-gray-700 text-xs text-gray-300 hover:bg-gray-800 transition">
+                        New Cluster from Selection
+                    </button>
+                </div>
+            </div>
+
+            <!-- Facts table -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead>
+                            <tr class="border-b border-gray-800">
+                                <th class="px-3 py-3 w-8">
+                                    <input type="checkbox" @change="toggleAll($event)" class="rounded bg-gray-800 border-gray-700 text-brand-cyan focus:ring-brand-cyan">
+                                </th>
+                                <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
+                                <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Value</th>
+                                <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Confidence</th>
+                                <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Cluster</th>
+                                <th class="px-3 py-3 w-8"></th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-800/50">
+                            <template x-for="fact in filteredFacts" :key="fact.id">
+                                <tr class="hover:bg-gray-800/30 transition group"
+                                    :class="selectedIds.includes(fact.id) ? 'bg-brand-cyan/5' : ''">
+                                    <td class="px-3 py-3">
+                                        <input type="checkbox" :value="fact.id"
+                                               :checked="selectedIds.includes(fact.id)"
+                                               @change="toggleFact(fact.id)"
+                                               class="rounded bg-gray-800 border-gray-700 text-brand-cyan focus:ring-brand-cyan">
+                                    </td>
+                                    <td class="px-3 py-3">
+                                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase"
+                                              :class="factTypeClass(fact.fact_type)"
+                                              x-text="fact.fact_type"></span>
+                                    </td>
+                                    <td class="px-3 py-3 text-sm text-gray-200 max-w-sm">
+                                        <!-- Profile image -->
+                                        <template x-if="fact.fact_type === 'profile_image'">
+                                            <div class="flex items-center gap-2">
+                                                <img :src="fact.value" class="w-10 h-10 rounded-lg object-cover border border-gray-700" onerror="this.style.display='none'">
+                                                <a :href="fact.value" target="_blank" class="text-brand-cyan hover:underline text-xs truncate" x-text="fact.value.substring(0, 50)"></a>
+                                            </div>
+                                        </template>
+                                        <!-- Social link -->
+                                        <template x-if="fact.fact_type === 'social_link'">
+                                            <div class="flex items-center gap-1.5">
+                                                <span class="text-xs font-medium text-sky-400" x-text="fact.value"></span>
+                                                <a x-show="getCtx(fact, 'url')" :href="getCtx(fact, 'url')" target="_blank"
+                                                   class="text-gray-500 hover:text-brand-cyan transition">
+                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>
+                                                </a>
+                                            </div>
+                                        </template>
+                                        <!-- Bio -->
+                                        <template x-if="fact.fact_type === 'bio'">
+                                            <p class="text-xs text-gray-300 leading-relaxed line-clamp-2" x-text="fact.value"></p>
+                                        </template>
+                                        <!-- Work history -->
+                                        <template x-if="fact.fact_type === 'work_history'">
+                                            <p class="text-xs text-gray-300" x-text="fact.value"></p>
+                                        </template>
+                                        <!-- URL-based values (web_reference, etc.) -->
+                                        <template x-if="!['profile_image','social_link','bio','work_history'].includes(fact.fact_type) && fact.value.startsWith('http')">
+                                            <a :href="fact.value" target="_blank" class="text-brand-cyan hover:underline truncate block" x-text="fact.value.substring(0, 80)"></a>
+                                        </template>
+                                        <!-- Default text values -->
+                                        <template x-if="!['profile_image','social_link','bio','work_history'].includes(fact.fact_type) && !fact.value.startsWith('http')">
+                                            <span class="truncate block" x-text="fact.value.substring(0, 120)"></span>
+                                        </template>
+                                    </td>
+                                    <td class="px-3 py-3">
+                                        <div class="flex items-center gap-2">
+                                            <div class="w-14 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                                                <div class="h-full rounded-full"
+                                                     :class="fact.confidence >= 80 ? 'bg-emerald-400' : fact.confidence >= 50 ? 'bg-amber-400' : 'bg-red-400'"
+                                                     :style="'width:' + fact.confidence + '%'"></div>
+                                            </div>
+                                            <span class="text-xs font-medium"
+                                                  :class="fact.confidence >= 80 ? 'text-emerald-400' : fact.confidence >= 50 ? 'text-amber-400' : 'text-red-400'"
+                                                  x-text="Math.round(fact.confidence) + '%'"></span>
+                                        </div>
+                                    </td>
+                                    <td class="px-3 py-3">
+                                        <span x-show="factClusterLabel(fact.id)"
+                                              class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-900/50 text-purple-400 border border-purple-800"
+                                              x-text="factClusterLabel(fact.id)"></span>
+                                        <span x-show="!factClusterLabel(fact.id)" class="text-xs text-gray-700">&mdash;</span>
+                                    </td>
+                                    <td class="px-3 py-3">
+                                        <div class="flex items-center gap-1">
+                                            <!-- Scrape button for web_reference facts -->
+                                            <button x-show="fact.fact_type === 'web_reference' && !isScraped(fact)"
+                                                    @click.stop="scrapeFact(fact)"
+                                                    :disabled="scrapingIds.includes(fact.id)"
+                                                    class="p-1 rounded text-gray-500 hover:text-brand-cyan hover:bg-brand-cyan/10 transition"
+                                                    :title="scrapingIds.includes(fact.id) ? 'Scraping...' : 'Scrape page content'">
+                                                <template x-if="!scrapingIds.includes(fact.id)">
+                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+                                                </template>
+                                                <template x-if="scrapingIds.includes(fact.id)">
+                                                    <div class="w-3.5 h-3.5 border-2 border-brand-cyan border-t-transparent rounded-full animate-spin"></div>
+                                                </template>
+                                            </button>
+                                            <span x-show="fact.fact_type === 'web_reference' && isScraped(fact)"
+                                                  class="text-[10px] text-emerald-500" title="Already scraped">&#10003;</span>
+                                            <!-- Expand detail button -->
+                                            <button @click.stop="toggleDetail(fact.id)"
+                                                    class="p-1 rounded text-gray-600 hover:text-gray-300 transition opacity-0 group-hover:opacity-100" title="Details">
+                                                <svg class="w-3.5 h-3.5 transition" :class="expandedId === fact.id ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
+                                            </button>
+                                            <!-- Unassign button -->
+                                            <button x-show="factClusterLabel(fact.id)"
+                                                    @click.stop="unassignFact(fact.id)"
+                                                    class="p-1 rounded text-gray-600 hover:text-red-400 transition" title="Remove from cluster">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
+                            <!-- Expanded detail row (rendered separately so it doesn't break table layout) -->
+                            <template x-for="fact in filteredFacts" :key="'detail-' + fact.id">
+                                <tr x-show="expandedId === fact.id" x-collapse class="bg-gray-800/20">
+                                    <td colspan="6" class="px-5 py-3">
+                                        <div class="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+                                            <template x-for="[key, val] in Object.entries(parseCtx(fact))" :key="key">
+                                                <div>
+                                                    <span class="text-gray-500 font-medium" x-text="key + ':'"></span>
+                                                    <template x-if="String(val).startsWith('http')">
+                                                        <a :href="val" target="_blank" class="text-brand-cyan hover:underline ml-1" x-text="String(val).substring(0, 80)"></a>
+                                                    </template>
+                                                    <template x-if="!String(val).startsWith('http')">
+                                                        <span class="text-gray-300 ml-1" x-text="String(val).substring(0, 200)"></span>
+                                                    </template>
+                                                </div>
+                                            </template>
+                                            <template x-if="Object.keys(parseCtx(fact)).length === 0">
+                                                <div class="col-span-2 text-gray-600">No additional details available.</div>
+                                            </template>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
+                            <template x-if="filteredFacts.length === 0">
+                                <tr>
+                                    <td colspan="6" class="px-5 py-12 text-center text-gray-600">
+                                        <span x-text="typeFilter ? 'No facts match this filter.' : 'No facts in this view.'"></span>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Cluster Modal -->
+    <div x-show="showCreateModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @keydown.escape.window="showCreateModal = false">
+        <div @click.outside="showCreateModal = false" class="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <h3 class="text-lg font-bold text-white mb-4">Create Identity Cluster</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Label</label>
+                    <input x-model="newClusterLabel" type="text" placeholder="e.g. Jason W - Developer"
+                           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-cyan">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Notes (optional)</label>
+                    <textarea x-model="newClusterNotes" rows="2" placeholder="Any identifying details..."
+                              class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-cyan"></textarea>
+                </div>
+                <div x-show="showCreateWithSelection" class="bg-gray-800/50 rounded-lg px-3 py-2">
+                    <p class="text-xs text-gray-400"><span x-text="selectedIds.length"></span> selected facts will be assigned to this cluster.</p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button @click="showCreateModal = false; showCreateWithSelection = false"
+                        class="px-4 py-2 rounded-lg border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 transition">Cancel</button>
+                <button @click="createCluster()"
+                        :disabled="!newClusterLabel.trim()"
+                        class="px-4 py-2 rounded-lg gradient-brand text-white text-sm font-semibold hover:opacity-90 transition disabled:opacity-40">
+                    Create
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Cluster Modal -->
+    <div x-show="showEditModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @keydown.escape.window="showEditModal = false">
+        <div @click.outside="showEditModal = false" class="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <h3 class="text-lg font-bold text-white mb-4">Edit Cluster</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Label</label>
+                    <input x-model="editLabel" type="text"
+                           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-cyan">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Notes</label>
+                    <textarea x-model="editNotes" rows="2"
+                              class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-cyan"></textarea>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button @click="showEditModal = false"
+                        class="px-4 py-2 rounded-lg border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 transition">Cancel</button>
+                <button @click="saveClusterEdit()"
+                        class="px-4 py-2 rounded-lg gradient-brand text-white text-sm font-semibold hover:opacity-90 transition">
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pivot Modal -->
+    <div x-show="showPivotModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @keydown.escape.window="showPivotModal = false">
+        <div @click.outside="showPivotModal = false" class="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl">
+            <h3 class="text-lg font-bold text-white mb-1">Pivot Investigation</h3>
+            <p class="text-sm text-gray-400 mb-4">Launch a new investigation from cluster: <span class="text-white font-medium" x-text="pivotCluster?.label"></span></p>
+
+            <div x-show="pivotLoading" class="py-8 text-center">
+                <div class="inline-block w-6 h-6 border-2 border-brand-cyan border-t-transparent rounded-full animate-spin"></div>
+                <p class="text-sm text-gray-500 mt-2">Building pivot query...</p>
+            </div>
+
+            <div x-show="!pivotLoading" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Target Query</label>
+                    <textarea x-model="pivotQuery" rows="3"
+                              class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-cyan"></textarea>
+                    <p class="text-xs text-gray-600 mt-1">Edit the query to refine your search before launching.</p>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Target Type</label>
+                    <select x-model="pivotTargetType"
+                            class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-cyan">
+                        <option value="person">Person</option>
+                        <option value="company">Company</option>
+                        <option value="group">Group</option>
+                    </select>
+                </div>
+                <div x-show="pivotFactsUsed.length > 0">
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Facts Used</label>
+                    <div class="flex flex-wrap gap-1.5">
+                        <template x-for="pf in pivotFactsUsed" :key="pf.value">
+                            <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-gray-800 text-gray-400 border border-gray-700">
+                                <span x-text="pf.type"></span>: <span x-text="pf.value.substring(0, 40)"></span>
+                            </span>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-3 mt-6">
+                <button @click="showPivotModal = false"
+                        class="px-4 py-2 rounded-lg border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 transition">Cancel</button>
+                <button @click="launchPivot()"
+                        :disabled="pivotLoading || !pivotQuery.trim()"
+                        class="px-4 py-2 rounded-lg gradient-brand text-white text-sm font-semibold hover:opacity-90 transition disabled:opacity-40 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>
+                    Launch Investigation
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function triageApp() {
+    return {
+        investigationId: '{{ investigation.id }}',
+        clusters: {{ clusters | tojson }},
+        allFacts: {{ all_facts | tojson }},
+        unclusteredFacts: {{ unclustered_facts | tojson }},
+
+        activeView: 'unclustered',
+        typeFilter: '',
+        selectedIds: [],
+        assignTarget: '',
+
+        showCreateModal: false,
+        showCreateWithSelection: false,
+        newClusterLabel: '',
+        newClusterNotes: '',
+
+        showEditModal: false,
+        editClusterId: '',
+        editLabel: '',
+        editNotes: '',
+
+        showPivotModal: false,
+        pivotLoading: false,
+        pivotCluster: null,
+        pivotQuery: '',
+        pivotTargetType: 'person',
+        pivotFactsUsed: [],
+
+        factClusterMap: {},
+        scrapingIds: [],
+        expandedId: null,
+
+        init() {
+            this.factClusterMap = {{ cluster_facts_map | tojson }};
+        },
+
+        get filteredFacts() {
+            let source;
+            if (this.activeView === 'unclustered') {
+                source = this.unclusteredFacts;
+            } else if (this.activeView === 'all') {
+                source = this.allFacts;
+            } else {
+                const clusterId = this.activeView;
+                const assignedIds = new Set();
+                for (const [fid, cid] of Object.entries(this.factClusterMap)) {
+                    if (cid === clusterId) assignedIds.add(parseInt(fid));
+                }
+                source = this.allFacts.filter(f => assignedIds.has(f.id));
+            }
+            if (this.typeFilter) {
+                source = source.filter(f => f.fact_type === this.typeFilter);
+            }
+            return source;
+        },
+
+        selectView(view) {
+            this.activeView = view;
+            this.selectedIds = [];
+        },
+
+        toggleFact(id) {
+            const idx = this.selectedIds.indexOf(id);
+            if (idx >= 0) this.selectedIds.splice(idx, 1);
+            else this.selectedIds.push(id);
+        },
+
+        toggleAll(event) {
+            if (event.target.checked) {
+                this.selectedIds = this.filteredFacts.map(f => f.id);
+            } else {
+                this.selectedIds = [];
+            }
+        },
+
+        factTypeClass(ft) {
+            const map = {
+                email: 'bg-blue-900/50 text-blue-400 border border-blue-800',
+                username: 'bg-purple-900/50 text-purple-400 border border-purple-800',
+                web_reference: 'bg-cyan-900/50 text-cyan-400 border border-cyan-800',
+                location: 'bg-green-900/50 text-green-400 border border-green-800',
+                company: 'bg-amber-900/50 text-amber-400 border border-amber-800',
+                phone: 'bg-pink-900/50 text-pink-400 border border-pink-800',
+                domain: 'bg-teal-900/50 text-teal-400 border border-teal-800',
+                ip_address: 'bg-rose-900/50 text-rose-400 border border-rose-800',
+                hostname: 'bg-indigo-900/50 text-indigo-400 border border-indigo-800',
+                cli_result: 'bg-orange-900/50 text-orange-400 border border-orange-800',
+                work_history: 'bg-amber-900/50 text-amber-300 border border-amber-700',
+                education: 'bg-indigo-900/50 text-indigo-400 border border-indigo-800',
+                profile_image: 'bg-violet-900/50 text-violet-400 border border-violet-800',
+                bio: 'bg-slate-800/50 text-slate-300 border border-slate-700',
+                social_link: 'bg-sky-900/50 text-sky-400 border border-sky-800',
+                skill: 'bg-lime-900/50 text-lime-400 border border-lime-800',
+            };
+            return map[ft] || 'bg-gray-800 text-gray-400 border border-gray-700';
+        },
+
+        getCtx(fact, key) {
+            const ctx = this.parseCtx(fact);
+            return ctx[key] || '';
+        },
+
+        parseCtx(fact) {
+            let raw = fact.context_json;
+            if (!raw) return {};
+            if (typeof raw === 'string') {
+                try { return JSON.parse(raw); } catch { return {}; }
+            }
+            return raw;
+        },
+
+        isScraped(fact) {
+            const ctx = this.parseCtx(fact);
+            return !!ctx.scraped;
+        },
+
+        toggleDetail(factId) {
+            this.expandedId = this.expandedId === factId ? null : factId;
+        },
+
+        async scrapeFact(fact) {
+            if (this.scrapingIds.includes(fact.id)) return;
+            this.scrapingIds.push(fact.id);
+            try {
+                const resp = await fetch(`/api/facts/${fact.id}/scrape`, {method: 'POST'});
+                const data = await resp.json();
+                if (data.ok && data.new_facts) {
+                    let ctx = this.parseCtx(fact);
+                    ctx.scraped = true;
+                    ctx.scraped_at = new Date().toISOString();
+                    ctx.facts_extracted = data.facts_extracted;
+                    fact.context_json = JSON.stringify(ctx);
+                    for (const nf of data.new_facts) {
+                        const newFact = {
+                            id: Date.now() + Math.random(),
+                            investigation_id: fact.investigation_id,
+                            fact_type: nf.fact_type,
+                            value: nf.value,
+                            confidence: nf.confidence_score || 0,
+                            sources_json: JSON.stringify(nf.sources || []),
+                            context_json: JSON.stringify(nf.context || {}),
+                        };
+                        this.allFacts.push(newFact);
+                        this.unclusteredFacts.push(newFact);
+                    }
+                } else if (data.error) {
+                    alert('Scrape failed: ' + data.error);
+                }
+            } catch (e) {
+                alert('Scrape error: ' + e.message);
+            } finally {
+                this.scrapingIds = this.scrapingIds.filter(id => id !== fact.id);
+            }
+        },
+
+        factClusterLabel(factId) {
+            const cid = this.factClusterMap[String(factId)];
+            if (!cid) return '';
+            const c = this.clusters.find(cl => cl.id === cid);
+            return c ? c.label : '';
+        },
+
+        async createCluster() {
+            if (!this.newClusterLabel.trim()) return;
+            const resp = await fetch('/api/clusters', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    investigation_id: this.investigationId,
+                    label: this.newClusterLabel.trim(),
+                    notes: this.newClusterNotes,
+                }),
+            });
+            const cluster = await resp.json();
+            cluster.fact_count = 0;
+            cluster.avg_confidence = 0;
+            this.clusters.push(cluster);
+
+            if (this.showCreateWithSelection && this.selectedIds.length > 0) {
+                await fetch(`/api/clusters/${cluster.id}/facts`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({fact_ids: this.selectedIds}),
+                });
+                for (const fid of this.selectedIds) {
+                    this.factClusterMap[String(fid)] = cluster.id;
+                }
+                cluster.fact_count = this.selectedIds.length;
+                this.unclusteredFacts = this.unclusteredFacts.filter(f => !this.selectedIds.includes(f.id));
+                this.selectedIds = [];
+            }
+
+            this.showCreateModal = false;
+            this.showCreateWithSelection = false;
+            this.newClusterLabel = '';
+            this.newClusterNotes = '';
+        },
+
+        editCluster(cluster) {
+            this.editClusterId = cluster.id;
+            this.editLabel = cluster.label;
+            this.editNotes = cluster.notes || '';
+            this.showEditModal = true;
+        },
+
+        async saveClusterEdit() {
+            await fetch(`/api/clusters/${this.editClusterId}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({label: this.editLabel, notes: this.editNotes}),
+            });
+            const c = this.clusters.find(cl => cl.id === this.editClusterId);
+            if (c) { c.label = this.editLabel; c.notes = this.editNotes; }
+            this.showEditModal = false;
+        },
+
+        async confirmDeleteCluster(cluster) {
+            if (!confirm(`Delete cluster "${cluster.label}"? Facts will be moved back to unclustered.`)) return;
+            await fetch(`/api/clusters/${cluster.id}`, {method: 'DELETE'});
+            for (const [fid, cid] of Object.entries(this.factClusterMap)) {
+                if (cid === cluster.id) {
+                    delete this.factClusterMap[fid];
+                    const fact = this.allFacts.find(f => f.id === parseInt(fid));
+                    if (fact && !this.unclusteredFacts.find(f => f.id === fact.id)) {
+                        this.unclusteredFacts.push(fact);
+                    }
+                }
+            }
+            this.clusters = this.clusters.filter(c => c.id !== cluster.id);
+            if (this.activeView === cluster.id) this.activeView = 'unclustered';
+        },
+
+        async assignSelected() {
+            if (!this.assignTarget || this.selectedIds.length === 0) return;
+            await fetch(`/api/clusters/${this.assignTarget}/facts`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({fact_ids: this.selectedIds}),
+            });
+            for (const fid of this.selectedIds) {
+                const oldCid = this.factClusterMap[String(fid)];
+                if (oldCid) {
+                    const oldCluster = this.clusters.find(c => c.id === oldCid);
+                    if (oldCluster) oldCluster.fact_count = Math.max(0, oldCluster.fact_count - 1);
+                }
+                this.factClusterMap[String(fid)] = this.assignTarget;
+            }
+            const target = this.clusters.find(c => c.id === this.assignTarget);
+            if (target) target.fact_count += this.selectedIds.length;
+            this.unclusteredFacts = this.unclusteredFacts.filter(f => !this.selectedIds.includes(f.id));
+            this.selectedIds = [];
+            this.assignTarget = '';
+        },
+
+        async unassignFact(factId) {
+            const cid = this.factClusterMap[String(factId)];
+            if (!cid) return;
+            await fetch(`/api/clusters/${cid}/facts/${factId}`, {method: 'DELETE'});
+            const cluster = this.clusters.find(c => c.id === cid);
+            if (cluster) cluster.fact_count = Math.max(0, cluster.fact_count - 1);
+            delete this.factClusterMap[String(factId)];
+            const fact = this.allFacts.find(f => f.id === factId);
+            if (fact && !this.unclusteredFacts.find(f => f.id === factId)) {
+                this.unclusteredFacts.push(fact);
+            }
+        },
+
+        async openPivot(cluster) {
+            this.pivotCluster = cluster;
+            this.pivotLoading = true;
+            this.pivotQuery = '';
+            this.pivotTargetType = 'person';
+            this.pivotFactsUsed = [];
+            this.showPivotModal = true;
+
+            const resp = await fetch(`/api/clusters/${cluster.id}/pivot-query`);
+            const data = await resp.json();
+            this.pivotQuery = data.suggested_query || '';
+            this.pivotTargetType = data.target_type || 'person';
+            this.pivotFactsUsed = data.facts_used || [];
+            this.pivotLoading = false;
+        },
+
+        async launchPivot() {
+            if (!this.pivotQuery.trim() || !this.pivotCluster) return;
+            const resp = await fetch(`/api/clusters/${this.pivotCluster.id}/pivot`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    query: this.pivotQuery.trim(),
+                    target_type: this.pivotTargetType,
+                }),
+            });
+            const data = await resp.json();
+            if (data.redirect) {
+                window.location.href = data.redirect;
+            }
+        },
+    };
+}
+</script>
+{% endblock %}
