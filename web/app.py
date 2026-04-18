@@ -15,11 +15,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+import hashlib
+import hmac
+import secrets
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from itsdangerous import URLSafeTimedSerializer
+from starlette.middleware.base import BaseHTTPMiddleware
 from sse_starlette.sse import EventSourceResponse
 
 # Ensure project root is on sys.path so pipeline modules resolve
@@ -42,12 +48,15 @@ from web.database import (
     get_fact_types,
     get_facts,
     get_investigation,
+    get_login_logs,
     get_reports,
     get_unclustered_facts,
     init_db,
     insert_facts,
     insert_report,
     list_investigations,
+    log_login,
+    log_logout,
     remove_fact_from_cluster,
     update_cluster,
     update_fact,
@@ -91,9 +100,45 @@ def _tool_available(tool: Dict) -> bool:
     return shutil.which(tool.get("cmd", "")) is not None
 
 
+# ── Auth ─────────────────────────────────────────────────────────────
+
+APP_PASSWORD = os.getenv("OSINT_PASSWORD", "mwxosint")
+SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
+SESSION_COOKIE = "osint_session"
+SESSION_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
+
+_signer = URLSafeTimedSerializer(SESSION_SECRET)
+
+PUBLIC_PATHS = {"/login", "/static"}
+
+
+def _is_authenticated(request: Request) -> bool:
+    token = request.cookies.get(SESSION_COOKIE, "")
+    if not token:
+        return False
+    try:
+        data = _signer.loads(token, max_age=SESSION_MAX_AGE)
+        return data.get("auth") is True
+    except Exception:
+        return False
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if any(path.startswith(p) for p in PUBLIC_PATHS):
+            return await call_next(request)
+        if _is_authenticated(request):
+            return await call_next(request)
+        if path.startswith("/api/"):
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        return RedirectResponse("/login", status_code=303)
+
+
 # ── FastAPI application ─────────────────────────────────────────────
 
 app = FastAPI(title="OSINT Kanban Pipeline")
+app.add_middleware(AuthMiddleware)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -106,14 +151,54 @@ async def startup():
     await init_db()
 
 
+# ── Auth routes ─────────────────────────────────────────────────────
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, error: str = ""):
+    return templates.TemplateResponse(request, "login.html", context={"error": error})
+
+
+@app.post("/login")
+async def login_submit(request: Request, password: str = Form(...)):
+    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
+    ua = request.headers.get("user-agent", "")
+
+    if hmac.compare_digest(password, APP_PASSWORD):
+        token = _signer.dumps({"auth": True})
+        await log_login(ip, ua, success=True, session_token=token[:32])
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            max_age=SESSION_MAX_AGE,
+            httponly=True,
+            samesite="lax",
+        )
+        return response
+
+    await log_login(ip, ua, success=False)
+    return templates.TemplateResponse(request, "login.html", context={
+        "error": "Invalid password",
+    })
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    token = request.cookies.get(SESSION_COOKIE, "")
+    if token:
+        await log_logout(token[:32])
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
 # ── Page routes ─────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     stats = await get_dashboard_stats()
     investigations = await list_investigations(limit=10)
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "dashboard.html", context={
         "stats": stats,
         "investigations": investigations,
     })
@@ -124,8 +209,7 @@ async def investigate_page(request: Request):
     tools_with_status = [
         {**t, "available": _tool_available(t)} for t in TOOLS
     ]
-    return templates.TemplateResponse("investigate.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "investigate.html", context={
         "tools": tools_with_status,
     })
 
@@ -135,8 +219,7 @@ async def progress_page(request: Request, inv_id: str):
     inv = await get_investigation(inv_id)
     if not inv:
         return RedirectResponse("/")
-    return templates.TemplateResponse("progress.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "progress.html", context={
         "investigation": inv,
     })
 
@@ -150,8 +233,7 @@ async def reports_list_page(request: Request, search: str = "", target_type: str
         investigations = [i for i in investigations if i["status"] == status]
     for inv in investigations:
         inv["cluster_count"] = await get_cluster_count(inv["id"])
-    return templates.TemplateResponse("reports.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "reports.html", context={
         "investigations": investigations,
         "search": search,
         "target_type": target_type,
@@ -187,8 +269,7 @@ async def report_detail_page(request: Request, inv_id: str, fact_type: str = "",
         if parent_cluster:
             parent_inv = await get_investigation(parent_cluster["investigation_id"])
 
-    return templates.TemplateResponse("report.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "report.html", context={
         "investigation": inv,
         "facts": facts,
         "fact_types": fact_types,
@@ -218,8 +299,7 @@ async def triage_page(request: Request, inv_id: str):
         for f in cfacts:
             cluster_facts_map[str(f["id"])] = cluster["id"]
 
-    return templates.TemplateResponse("triage.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "triage.html", context={
         "investigation": inv,
         "clusters": clusters,
         "all_facts": all_facts,
@@ -239,10 +319,17 @@ async def settings_page(request: Request):
             raw = os.getenv(t["env_key"], "")
             key_val = f"{raw[:6]}{'*' * max(0, len(raw) - 6)}" if raw else ""
         tools_status.append({**t, "status": status, "key_masked": key_val})
-    return templates.TemplateResponse("settings.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "settings.html", context={
         "tools": tools_status,
     })
+
+
+# ── Hidden log page (not in nav) ────────────────────────────────────
+
+@app.get("/log", response_class=HTMLResponse)
+async def login_log_page(request: Request):
+    logs = await get_login_logs(limit=200)
+    return templates.TemplateResponse(request, "log.html", context={"logs": logs})
 
 
 # ── API routes ──────────────────────────────────────────────────────
@@ -428,6 +515,15 @@ async def api_pivot_from_cluster(cluster_id: str, request: Request):
 
     asyncio.create_task(_run_pipeline(inv_id, query, target_type, [], ["json", "html", "pdf"], config))
     return JSONResponse({"investigation_id": inv_id, "redirect": f"/investigate/{inv_id}/progress"})
+
+
+# ── Fact management ─────────────────────────────────────────────────
+
+@app.delete("/api/facts/{fact_id}")
+async def api_delete_fact(fact_id: int):
+    from web.database import delete_fact
+    await delete_fact(fact_id)
+    return JSONResponse({"ok": True})
 
 
 # ── On-demand scraping ──────────────────────────────────────────────

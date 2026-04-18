@@ -66,6 +66,18 @@ MIGRATION_ADD_PARENT_CLUSTER = """
 ALTER TABLE investigations ADD COLUMN parent_cluster_id TEXT DEFAULT NULL;
 """
 
+LOGIN_LOG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS login_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip TEXT NOT NULL,
+    user_agent TEXT DEFAULT '',
+    success INTEGER NOT NULL DEFAULT 0,
+    logged_in_at TEXT NOT NULL,
+    logged_out_at TEXT,
+    session_token TEXT DEFAULT ''
+);
+"""
+
 
 async def get_db() -> aiosqlite.Connection:
     db = await aiosqlite.connect(str(DB_PATH))
@@ -79,7 +91,7 @@ async def init_db():
     db = await get_db()
     try:
         await db.executescript(SCHEMA)
-        # Safe migration: add parent_cluster_id if missing
+        await db.executescript(LOGIN_LOG_SCHEMA)
         cur = await db.execute("PRAGMA table_info(investigations)")
         cols = {row[1] for row in await cur.fetchall()}
         if "parent_cluster_id" not in cols:
@@ -259,6 +271,16 @@ async def get_fact(fact_id: int) -> Optional[Dict]:
         await db.close()
 
 
+async def delete_fact(fact_id: int) -> None:
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM cluster_facts WHERE fact_id = ?", (fact_id,))
+        await db.execute("DELETE FROM facts WHERE id = ?", (fact_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def update_fact(fact_id: int, **fields) -> None:
     db = await get_db()
     try:
@@ -434,5 +456,44 @@ async def get_cluster(cluster_id: str) -> Optional[Dict]:
         cur = await db.execute("SELECT * FROM identity_clusters WHERE id = ?", (cluster_id,))
         row = await cur.fetchone()
         return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+# ── Login logs ──────────────────────────────────────────────────────
+
+async def log_login(ip: str, user_agent: str, success: bool, session_token: str = "") -> int:
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "INSERT INTO login_logs (ip, user_agent, success, logged_in_at, session_token) VALUES (?, ?, ?, ?, ?)",
+            (ip, user_agent[:256], 1 if success else 0, datetime.utcnow().isoformat(), session_token),
+        )
+        await db.commit()
+        return cur.lastrowid
+    finally:
+        await db.close()
+
+
+async def log_logout(session_token: str):
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE login_logs SET logged_out_at = ? WHERE session_token = ? AND logged_out_at IS NULL",
+            (datetime.utcnow().isoformat(), session_token),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_login_logs(limit: int = 100) -> List[Dict]:
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT * FROM login_logs ORDER BY logged_in_at DESC LIMIT ?", (limit,)
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
     finally:
         await db.close()

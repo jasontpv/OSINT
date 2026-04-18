@@ -51,3 +51,7 @@ Thumbs.db
 
 # MWX tasks checkpoint
 .mwx/
+
+# Local uvicorn state (managed by start.sh/stop.sh/status.sh)
+.uvicorn.pid
+uvicorn.log

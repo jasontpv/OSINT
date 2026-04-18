@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-950">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login — OSINT Pipeline</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { cyan: '#0693e3', purple: '#9b51e0', orange: '#ff6900' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .gradient-brand { background: linear-gradient(135deg, #0693e3, #9b51e0); }
+    </style>
+</head>
+<body class="h-full flex items-center justify-center p-4">
+    <div class="w-full max-w-sm">
+        <div class="text-center mb-8">
+            <div class="gradient-brand w-16 h-16 rounded-2xl mx-auto flex items-center justify-center mb-5">
+                <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>
+            </div>
+            <h1 class="text-2xl font-bold text-white">OSINT Pipeline</h1>
+            <p class="text-sm text-gray-500 mt-1">MythWorx Intelligence Platform</p>
+        </div>
+
+        <form method="POST" action="/login" class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
+            {% if error %}
+            <div class="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-sm text-red-400 flex items-center gap-2">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"/></svg>
+                {{ error }}
+            </div>
+            {% endif %}
+
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Password</label>
+                <input type="password" name="password" required autofocus placeholder="Enter password"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-cyan focus:border-transparent text-sm">
+            </div>
+
+            <button type="submit" class="w-full gradient-brand text-white py-3 rounded-lg text-sm font-semibold hover:opacity-90 transition">
+                Sign In
+            </button>
+        </form>
+
+        <p class="text-center text-xs text-gray-700 mt-6">MythWorx, LLC &copy; 2026</p>
+    </div>
+</body>
+</html>
