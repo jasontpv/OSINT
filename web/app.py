@@ -216,18 +216,45 @@ def _action_from_path(method: str, path: str) -> str:
     return "page_view"
 
 
+_BANNED_MESSAGES = [
+    "Nice try. We see you.",
+    "This IP has been permanently banned. Have a great day.",
+    "Access denied. Your activity has been logged and reported.",
+    "You've been blacklisted. Maybe try a different hobby?",
+    "403 — Forbidden. Yes, we mean you specifically.",
+    "Our OSINT tools work both ways. We know where you are.",
+    "Knock knock. Nobody's home. Especially not for you.",
+    "All your requests are belong to us.",
+    "Roses are red, violets are blue, you're banned from this server, and we're watching you.",
+    "Error 403: Talent not found.",
+    "You must be lost. This isn't the server you're looking for.",
+    "Blocked. Logged. Geolocated. Anything else?",
+    "Imagine thinking a banned IP would just... work.",
+    "We appreciate your persistence. The answer is still no.",
+    "Your IP has been added to our permanent collection. Thanks for visiting.",
+]
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # Block blacklisted IPs immediately
         ip = _get_ip(request)
         if ip in _blacklist_set:
+            import random
+            msg = random.choice(_BANNED_MESSAGES)
             asyncio.ensure_future(log_activity(
                 ip=ip, action="blocked", path=path, method=request.method,
                 user_agent=request.headers.get("user-agent", ""), status_code=403,
+                detail=msg,
             ))
-            return JSONResponse({"error": "Forbidden"}, status_code=403)
+            return HTMLResponse(
+                f"""<!DOCTYPE html><html><head><title>403</title>
+<style>body{{background:#0a0a0a;color:#ef4444;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}}
+.box{{max-width:500px;padding:40px}}.code{{font-size:72px;font-weight:bold;opacity:.3}}.msg{{font-size:18px;margin-top:20px;line-height:1.6}}</style></head>
+<body><div class="box"><div class="code">403</div><div class="msg">{msg}</div></div></body></html>""",
+                status_code=403,
+            )
 
         if any(path.startswith(p) for p in SKIP_LOG_PREFIXES):
             return await call_next(request)
