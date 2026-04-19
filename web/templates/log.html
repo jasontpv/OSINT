@@ -1,56 +1,196 @@
 {% extends "base.html" %}
 {% set active_page = "" %}
-{% block title %}Login Log — OSINT Pipeline{% endblock %}
+{% block title %}Activity Log — OSINT Pipeline{% endblock %}
 
 {% block content %}
-<div class="max-w-6xl mx-auto space-y-6">
+<div class="max-w-7xl mx-auto space-y-6" x-data="logManager()">
     <div>
-        <h2 class="text-2xl font-bold text-white">Login Log</h2>
-        <p class="text-sm text-gray-500 mt-1">Authentication events — last 200 entries</p>
+        <h2 class="text-2xl font-bold text-white">Activity Log</h2>
+        <p class="text-sm text-gray-500 mt-1">All requests, sessions, and IP blacklist</p>
     </div>
 
+    <!-- Blacklist Panel -->
+    <div class="bg-gray-900 border border-red-900/50 rounded-xl" x-data="{ open: {{ 'true' if blacklist else 'false' }} }">
+        <button @click="open = !open" class="w-full flex items-center justify-between px-5 py-4 text-left">
+            <div class="flex items-center gap-3">
+                <svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                <h3 class="text-base font-semibold text-white">Blacklisted IPs</h3>
+                <span class="text-xs text-red-400 bg-red-900/30 px-2 py-0.5 rounded-full border border-red-800">{{ blacklist|length }}</span>
+            </div>
+            <svg class="w-5 h-5 text-gray-500 transition" :class="open && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
+        </button>
+        <div x-show="open" x-collapse x-cloak class="border-t border-gray-800">
+            {% if blacklist %}
+            <div class="divide-y divide-gray-800/50">
+                {% for entry in blacklist %}
+                <div class="flex items-center justify-between px-5 py-3 hover:bg-gray-800/30 transition">
+                    <div class="flex items-center gap-4">
+                        <span class="text-sm text-red-400 font-mono">{{ entry.ip }}</span>
+                        {% if entry.geo_city or entry.geo_country %}
+                        <span class="text-xs text-gray-500">{{ entry.geo_city }}{% if entry.geo_city and entry.geo_country %}, {% endif %}{{ entry.geo_country }}</span>
+                        {% endif %}
+                        {% if entry.reason %}
+                        <span class="text-xs text-gray-600 italic">{{ entry.reason }}</span>
+                        {% endif %}
+                        <span class="text-xs text-gray-700">banned {{ entry.banned_at[:10] }}</span>
+                    </div>
+                    <button @click="unbanIp('{{ entry.ip }}')" class="px-3 py-1 text-xs rounded-lg border border-gray-700 text-gray-400 hover:bg-emerald-900/30 hover:text-emerald-400 hover:border-emerald-800 transition">
+                        Unban
+                    </button>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-6 text-center text-gray-600 text-sm">No IPs blacklisted.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <form method="GET" action="/log" class="bg-gray-900 border border-gray-800 rounded-xl px-5 py-4 flex items-end gap-4 flex-wrap">
+        <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">Action</label>
+            <select name="action" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-cyan min-w-[140px]">
+                <option value="">All</option>
+                {% for a in actions %}
+                <option value="{{ a }}" {% if f_action == a %}selected{% endif %}>{{ a }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">IP Address</label>
+            <input type="text" name="ip" value="{{ f_ip }}" placeholder="e.g. 104.196..."
+                class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-cyan w-36 placeholder-gray-600 font-mono">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">Country</label>
+            <select name="country" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-cyan min-w-[130px]">
+                <option value="">All</option>
+                {% for c in countries %}
+                <option value="{{ c }}" {% if f_country == c %}selected{% endif %}>{{ c }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">Session</label>
+            <select name="session" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-cyan min-w-[160px]">
+                <option value="">All sessions</option>
+                {% for s in sessions %}
+                <option value="{{ s.session_token }}" {% if f_session == s.session_token %}selected{% endif %}>
+                    {{ s.session_token[:8] }}.. — {{ s.ip }} ({{ s.hits }} hits)
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="flex gap-2">
+            <button type="submit" class="px-4 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm text-white hover:bg-gray-700 transition">Filter</button>
+            <a href="/log" class="px-4 py-2 rounded-lg border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 transition">Clear</a>
+        </div>
+    </form>
+
+    <!-- Quick Filters -->
+    <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs text-gray-500">Quick:</span>
+        <a href="/log?action=blocked" class="px-3 py-1.5 rounded-lg text-xs font-medium {% if f_action == 'blocked' %}bg-red-900/40 text-red-400 border border-red-800{% else %}border border-gray-700 text-gray-400 hover:bg-red-900/20 hover:text-red-400 hover:border-red-800{% endif %} transition">
+            Blocked / Banned
+        </a>
+        <a href="/log?action=login_attempt" class="px-3 py-1.5 rounded-lg text-xs font-medium {% if f_action == 'login_attempt' %}bg-amber-900/40 text-amber-400 border border-amber-800{% else %}border border-gray-700 text-gray-400 hover:bg-amber-900/20 hover:text-amber-400 hover:border-amber-800{% endif %} transition">
+            Login Attempts
+        </a>
+        <a href="/log?action=admin%3Aban_ip" class="px-3 py-1.5 rounded-lg text-xs font-medium {% if f_action == 'admin:ban_ip' %}bg-orange-900/40 text-orange-400 border border-orange-800{% else %}border border-gray-700 text-gray-400 hover:bg-orange-900/20 hover:text-orange-400 hover:border-orange-800{% endif %} transition">
+            Ban Actions
+        </a>
+        <a href="/log?action=start_investigation" class="px-3 py-1.5 rounded-lg text-xs font-medium {% if f_action == 'start_investigation' %}bg-emerald-900/40 text-emerald-400 border border-emerald-800{% else %}border border-gray-700 text-gray-400 hover:bg-emerald-900/20 hover:text-emerald-400 hover:border-emerald-800{% endif %} transition">
+            Investigations
+        </a>
+        {% if f_action or f_ip or f_session or f_country %}
+        <a href="/log" class="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-700 text-gray-500 hover:text-white hover:bg-gray-800 transition">
+            Show All
+        </a>
+        {% endif %}
+    </div>
+
+    <!-- Log Table -->
     <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         <div class="overflow-x-auto">
             <table class="w-full">
                 <thead>
                     <tr class="border-b border-gray-800">
-                        <th class="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Time (UTC)</th>
-                        <th class="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
-                        <th class="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Source IP</th>
-                        <th class="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Duration</th>
-                        <th class="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">User Agent</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Time (UTC)</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Action</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Source IP</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Location</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Session</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Path</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider w-16"></th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-800/50">
                     {% for entry in logs %}
-                    <tr class="hover:bg-gray-800/30 transition">
-                        <td class="px-5 py-3 text-sm text-gray-300 font-mono whitespace-nowrap">{{ entry.logged_in_at[:19] }}</td>
-                        <td class="px-5 py-3">
-                            {% if entry.success %}
-                            <span class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-emerald-900/50 text-emerald-400 border border-emerald-800">OK</span>
+                    <tr class="hover:bg-gray-800/30 transition group">
+                        <td class="px-4 py-2.5 text-xs text-gray-400 font-mono whitespace-nowrap">{{ entry.ts[:19] }}</td>
+                        <td class="px-4 py-2.5">
+                            {% set act = entry.action %}
+                            <a href="/log?action={{ act }}" class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase hover:opacity-80 transition
+                                {% if act == 'login_attempt' %}bg-amber-900/50 text-amber-400 border border-amber-800
+                                {% elif act == 'blocked' %}bg-red-900/50 text-red-400 border border-red-800
+                                {% elif act == 'admin:ban_ip' %}bg-orange-900/50 text-orange-400 border border-orange-800
+                                {% elif act == 'admin:unban_ip' %}bg-teal-900/50 text-teal-400 border border-teal-800
+                                {% elif act == 'logout' %}bg-gray-800 text-gray-400 border border-gray-700
+                                {% elif act == 'dashboard' %}bg-blue-900/50 text-blue-400 border border-blue-800
+                                {% elif act.startswith('api:') %}bg-purple-900/50 text-purple-400 border border-purple-800
+                                {% elif act == 'start_investigation' %}bg-emerald-900/50 text-emerald-400 border border-emerald-800
+                                {% elif act == 'view_report' %}bg-cyan-900/50 text-cyan-400 border border-cyan-800
+                                {% else %}bg-gray-800 text-gray-400 border border-gray-700{% endif %}">
+                                {{ act }}
+                            </a>
+                        </td>
+                        <td class="px-4 py-2.5">
+                            <div class="flex items-center gap-2">
+                                <a href="/log?ip={{ entry.ip }}" class="text-sm text-gray-200 font-mono hover:text-brand-cyan transition">{{ entry.ip }}</a>
+                                {% if entry.ip in blacklist_ips %}
+                                <span class="text-[9px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-800 font-semibold">BANNED</span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">
+                            {% if entry.geo_city or entry.geo_country %}
+                            <span title="{{ entry.geo_lat }}, {{ entry.geo_lon }}">
+                                {% if entry.geo_city %}{{ entry.geo_city }}, {% endif %}
+                                {% if entry.geo_region %}{{ entry.geo_region }}, {% endif %}
+                                <a href="/log?country={{ entry.geo_country }}" class="hover:text-brand-cyan transition">{{ entry.geo_country }}</a>
+                            </span>
                             {% else %}
-                            <span class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-red-900/50 text-red-400 border border-red-800">FAIL</span>
+                            <span class="text-gray-600">—</span>
                             {% endif %}
                         </td>
-                        <td class="px-5 py-3 text-sm text-gray-200 font-mono">{{ entry.ip }}</td>
-                        <td class="px-5 py-3 text-sm text-gray-400 whitespace-nowrap">
-                            {% if entry.success and entry.logged_out_at %}
-                                {% set t_in = entry.logged_in_at[:19] %}
-                                {% set t_out = entry.logged_out_at[:19] %}
-                                <span class="text-gray-300">{{ t_out[:19] }}</span>
-                                <span class="text-gray-600 text-xs ml-1">(logged out)</span>
-                            {% elif entry.success %}
-                                <span class="text-blue-400 text-xs">active / no logout</span>
+                        <td class="px-4 py-2.5 text-xs font-mono">
+                            {% if entry.session_token %}
+                            <a href="/log?session={{ entry.session_token }}" class="text-gray-500 hover:text-brand-cyan transition" title="{{ entry.session_token }}">{{ entry.session_token[:8] }}..</a>
                             {% else %}
-                                <span class="text-gray-600">—</span>
+                            <span class="text-gray-700">—</span>
                             {% endif %}
                         </td>
-                        <td class="px-5 py-3 text-xs text-gray-600 max-w-xs truncate" title="{{ entry.user_agent }}">{{ entry.user_agent[:80] }}</td>
+                        <td class="px-4 py-2.5 text-xs text-gray-500 max-w-[200px] truncate" title="{{ entry.path }}">{{ entry.path }}</td>
+                        <td class="px-4 py-2.5">
+                            {% set sc = entry.status_code %}
+                            <span class="text-xs font-mono {% if sc >= 400 %}text-red-400{% elif sc >= 300 %}text-amber-400{% else %}text-gray-500{% endif %}">{{ sc }}</span>
+                        </td>
+                        <td class="px-4 py-2.5 text-right">
+                            {% if entry.ip not in blacklist_ips and entry.ip != '127.0.0.1' and not entry.ip.startswith('10.') and not entry.ip.startswith('192.168.') %}
+                            <button @click="banIp('{{ entry.ip }}', '{{ entry.geo_city }}', '{{ entry.geo_country }}')"
+                                    class="opacity-0 group-hover:opacity-100 transition px-2 py-1 rounded text-[10px] font-semibold border border-red-900 text-red-500 hover:bg-red-900/30 hover:text-red-400"
+                                    title="Ban this IP">
+                                Ban
+                            </button>
+                            {% endif %}
+                        </td>
                     </tr>
                     {% endfor %}
                     {% if not logs %}
                     <tr>
-                        <td colspan="5" class="px-5 py-12 text-center text-gray-600">No login events recorded yet.</td>
+                        <td colspan="8" class="px-5 py-12 text-center text-gray-600">No activity recorded yet.</td>
                     </tr>
                     {% endif %}
                 </tbody>
@@ -59,16 +199,42 @@
         {% if logs %}
         <div class="px-5 py-3 border-t border-gray-800 flex items-center justify-between">
             <span class="text-xs text-gray-600">{{ logs|length }} events</span>
-            <span class="text-xs text-gray-600">
-                {% set failed = logs|selectattr('success', 'equalto', 0)|list|length %}
-                {% if failed > 0 %}
-                <span class="text-red-500">{{ failed }} failed attempt{{ 's' if failed != 1 }}</span>
-                {% else %}
-                No failed attempts
+            <div class="flex items-center gap-4 text-xs text-gray-600">
+                {% set unique_ips = logs|map(attribute='ip')|unique|list|length %}
+                <span>{{ unique_ips }} unique IP{{ 's' if unique_ips != 1 }}</span>
+                {% set blocked = logs|selectattr('action', 'equalto', 'blocked')|list|length %}
+                {% if blocked > 0 %}
+                <span class="text-red-500">{{ blocked }} blocked</span>
                 {% endif %}
-            </span>
+                {% set login_attempts = logs|selectattr('action', 'equalto', 'login_attempt')|list|length %}
+                {% if login_attempts > 0 %}
+                <span class="text-amber-500">{{ login_attempts }} login attempt{{ 's' if login_attempts != 1 }}</span>
+                {% endif %}
+            </div>
         </div>
         {% endif %}
     </div>
 </div>
+
+<script>
+function logManager() {
+    return {
+        async banIp(ip, city, country) {
+            const reason = prompt(`Ban IP ${ip}?\nEnter reason (optional):`, 'Suspicious activity');
+            if (reason === null) return;
+            await fetch('/api/blacklist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip, reason, geo_city: city, geo_country: country }),
+            });
+            location.reload();
+        },
+        async unbanIp(ip) {
+            if (!confirm(`Remove ${ip} from blacklist?`)) return;
+            await fetch(`/api/blacklist/${ip}`, { method: 'DELETE' });
+            location.reload();
+        }
+    };
+}
+</script>
 {% endblock %}

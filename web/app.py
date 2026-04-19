@@ -35,10 +35,16 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 from web.database import (
     add_facts_to_cluster,
+    blacklist_ip,
     create_cluster,
     create_investigation,
     delete_cluster,
     delete_investigation,
+    get_activity_actions,
+    get_activity_countries,
+    get_activity_logs,
+    get_activity_sessions,
+    get_blacklist,
     get_cluster,
     get_cluster_count,
     get_cluster_facts,
@@ -54,10 +60,13 @@ from web.database import (
     init_db,
     insert_facts,
     insert_report,
+    is_ip_blacklisted,
     list_investigations,
+    log_activity,
     log_login,
     log_logout,
     remove_fact_from_cluster,
+    unblacklist_ip,
     update_cluster,
     update_fact,
     update_investigation,
@@ -123,16 +132,142 @@ def _is_authenticated(request: Request) -> bool:
         return False
 
 
+# ── IP geolocation cache ────────────────────────────────────────────
+
+_geo_cache: Dict[str, Dict] = {}
+
+
+async def _geolocate(ip: str) -> Dict:
+    if ip in _geo_cache:
+        return _geo_cache[ip]
+    if ip in ("127.0.0.1", "::1", "localhost", "unknown") or ip.startswith("10.") or ip.startswith("192.168."):
+        result = {"city": "Local", "regionName": "", "country": "Local", "lat": 0, "lon": 0}
+        _geo_cache[ip] = result
+        return result
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=3) as client:
+            r = await client.get(f"http://ip-api.com/json/{ip}?fields=city,regionName,country,lat,lon")
+            if r.status_code == 200:
+                data = r.json()
+                _geo_cache[ip] = data
+                return data
+    except Exception:
+        pass
+    empty = {"city": "", "regionName": "", "country": "", "lat": 0, "lon": 0}
+    _geo_cache[ip] = empty
+    return empty
+
+
+def _get_ip(request: Request) -> str:
+    return request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
+        request.client.host if request.client else "unknown"
+    )
+
+
+def _get_session_short(request: Request) -> str:
+    token = request.cookies.get(SESSION_COOKIE, "")
+    return token[:16] if token else ""
+
+
+SKIP_LOG_PREFIXES = ("/static", "/favicon")
+
+_blacklist_set: set = set()
+
+
+async def _load_blacklist():
+    global _blacklist_set
+    bl = await get_blacklist()
+    _blacklist_set = {entry["ip"] for entry in bl}
+
+
+def _action_from_path(method: str, path: str) -> str:
+    if path == "/login" and method == "POST":
+        return "login_attempt"
+    if path == "/login":
+        return "login_page"
+    if path == "/logout":
+        return "logout"
+    if path == "/":
+        return "dashboard"
+    if path == "/investigate" and method == "POST":
+        return "start_investigation"
+    if path.startswith("/investigate"):
+        return "investigate"
+    if path == "/reports" or (path.startswith("/reports") and "/triage" not in path and len(path.split("/")) == 3):
+        return "view_report"
+    if "/triage" in path:
+        return "triage"
+    if path.startswith("/reports"):
+        return "reports_list"
+    if path == "/settings" and method == "POST":
+        return "save_settings"
+    if path == "/settings":
+        return "settings"
+    if path == "/log":
+        return "view_log"
+    if path.startswith("/api/blacklist"):
+        if method == "POST":
+            return "admin:ban_ip"
+        if method == "DELETE":
+            return "admin:unban_ip"
+    if path.startswith("/api/"):
+        return f"api:{path.split('/')[2]}" if len(path.split("/")) > 2 else "api"
+    return "page_view"
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+
+        # Block blacklisted IPs immediately
+        ip = _get_ip(request)
+        if ip in _blacklist_set:
+            asyncio.ensure_future(log_activity(
+                ip=ip, action="blocked", path=path, method=request.method,
+                user_agent=request.headers.get("user-agent", ""), status_code=403,
+            ))
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        if any(path.startswith(p) for p in SKIP_LOG_PREFIXES):
+            return await call_next(request)
+
         if any(path.startswith(p) for p in PUBLIC_PATHS):
-            return await call_next(request)
+            response = await call_next(request)
+            if path != "/login" or request.method == "GET":
+                asyncio.ensure_future(self._log_request(request, response.status_code))
+            return response
+
         if _is_authenticated(request):
-            return await call_next(request)
+            response = await call_next(request)
+            asyncio.ensure_future(self._log_request(request, response.status_code))
+            return response
+
         if path.startswith("/api/"):
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
         return RedirectResponse("/login", status_code=303)
+
+    @staticmethod
+    async def _log_request(request: Request, status_code: int):
+        try:
+            ip = _get_ip(request)
+            geo = await _geolocate(ip)
+            await log_activity(
+                ip=ip,
+                action=_action_from_path(request.method, request.url.path),
+                path=request.url.path,
+                method=request.method,
+                session_token=_get_session_short(request),
+                user_agent=request.headers.get("user-agent", ""),
+                status_code=status_code,
+                geo_city=geo.get("city", ""),
+                geo_region=geo.get("regionName", ""),
+                geo_country=geo.get("country", ""),
+                geo_lat=geo.get("lat", 0),
+                geo_lon=geo.get("lon", 0),
+            )
+        except Exception:
+            pass
 
 
 # ── FastAPI application ─────────────────────────────────────────────
@@ -149,6 +284,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.on_event("startup")
 async def startup():
     await init_db()
+    await _load_blacklist()
 
 
 # ── Auth routes ─────────────────────────────────────────────────────
@@ -327,9 +463,51 @@ async def settings_page(request: Request):
 # ── Hidden log page (not in nav) ────────────────────────────────────
 
 @app.get("/log", response_class=HTMLResponse)
-async def login_log_page(request: Request):
-    logs = await get_login_logs(limit=200)
-    return templates.TemplateResponse(request, "log.html", context={"logs": logs})
+async def activity_log_page(
+    request: Request,
+    action: str = "",
+    ip: str = "",
+    session: str = "",
+    country: str = "",
+):
+    logs = await get_activity_logs(limit=500, action=action, ip=ip, session=session, country=country)
+    actions = await get_activity_actions()
+    countries = await get_activity_countries()
+    sessions = await get_activity_sessions()
+    bl = await get_blacklist()
+    return templates.TemplateResponse(request, "log.html", context={
+        "logs": logs,
+        "actions": actions,
+        "countries": countries,
+        "sessions": sessions,
+        "blacklist": bl,
+        "blacklist_ips": {entry["ip"] for entry in bl},
+        "f_action": action,
+        "f_ip": ip,
+        "f_session": session,
+        "f_country": country,
+    })
+
+
+@app.post("/api/blacklist")
+async def api_ban_ip(request: Request):
+    body = await request.json()
+    ip = body.get("ip", "").strip()
+    reason = body.get("reason", "")
+    geo_city = body.get("geo_city", "")
+    geo_country = body.get("geo_country", "")
+    if not ip:
+        return JSONResponse({"error": "ip required"}, status_code=400)
+    await blacklist_ip(ip, reason=reason, geo_city=geo_city, geo_country=geo_country)
+    _blacklist_set.add(ip)
+    return JSONResponse({"ok": True, "ip": ip})
+
+
+@app.delete("/api/blacklist/{ip:path}")
+async def api_unban_ip(ip: str):
+    await unblacklist_ip(ip)
+    _blacklist_set.discard(ip)
+    return JSONResponse({"ok": True, "ip": ip})
 
 
 # ── API routes ──────────────────────────────────────────────────────

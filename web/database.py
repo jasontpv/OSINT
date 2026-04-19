@@ -76,6 +76,32 @@ CREATE TABLE IF NOT EXISTS login_logs (
     logged_out_at TEXT,
     session_token TEXT DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS activity_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    geo_city TEXT DEFAULT '',
+    geo_region TEXT DEFAULT '',
+    geo_country TEXT DEFAULT '',
+    geo_lat REAL DEFAULT 0,
+    geo_lon REAL DEFAULT 0,
+    action TEXT NOT NULL,
+    path TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL DEFAULT 'GET',
+    session_token TEXT DEFAULT '',
+    user_agent TEXT DEFAULT '',
+    status_code INTEGER DEFAULT 200,
+    detail TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS blacklisted_ips (
+    ip TEXT PRIMARY KEY,
+    reason TEXT DEFAULT '',
+    geo_city TEXT DEFAULT '',
+    geo_country TEXT DEFAULT '',
+    banned_at TEXT NOT NULL
+);
 """
 
 
@@ -460,7 +486,7 @@ async def get_cluster(cluster_id: str) -> Optional[Dict]:
         await db.close()
 
 
-# ── Login logs ──────────────────────────────────────────────────────
+# ── Login logs (legacy, kept for backward compat) ──────────────────
 
 async def log_login(ip: str, user_agent: str, success: bool, session_token: str = "") -> int:
     db = await get_db()
@@ -495,5 +521,140 @@ async def get_login_logs(limit: int = 100) -> List[Dict]:
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+# ── Activity logs ───────────────────────────────────────────────────
+
+async def log_activity(
+    ip: str, action: str, path: str = "", method: str = "GET",
+    session_token: str = "", user_agent: str = "", status_code: int = 200,
+    detail: str = "",
+    geo_city: str = "", geo_region: str = "", geo_country: str = "",
+    geo_lat: float = 0, geo_lon: float = 0,
+):
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO activity_logs
+               (ts, ip, geo_city, geo_region, geo_country, geo_lat, geo_lon,
+                action, path, method, session_token, user_agent, status_code, detail)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (datetime.utcnow().isoformat(), ip,
+             geo_city, geo_region, geo_country, geo_lat, geo_lon,
+             action, path, method, session_token, user_agent[:256], status_code, detail),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_activity_logs(
+    limit: int = 500, action: str = "", ip: str = "",
+    session: str = "", country: str = "",
+) -> List[Dict]:
+    db = await get_db()
+    try:
+        clauses = []
+        params: list = []
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        if ip:
+            clauses.append("ip LIKE ?")
+            params.append(f"%{ip}%")
+        if session:
+            clauses.append("session_token LIKE ?")
+            params.append(f"%{session}%")
+        if country:
+            clauses.append("geo_country LIKE ?")
+            params.append(f"%{country}%")
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        cur = await db.execute(
+            f"SELECT * FROM activity_logs{where} ORDER BY ts DESC LIMIT ?", params,
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def get_activity_actions() -> List[str]:
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT DISTINCT action FROM activity_logs ORDER BY action")
+        return [r[0] for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_activity_countries() -> List[str]:
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT DISTINCT geo_country FROM activity_logs WHERE geo_country != '' ORDER BY geo_country"
+        )
+        return [r[0] for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_activity_sessions() -> List[Dict]:
+    """Return distinct sessions with their first-seen IP and time."""
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """SELECT session_token, ip, geo_city, geo_country,
+                      MIN(ts) as first_seen, MAX(ts) as last_seen, COUNT(*) as hits
+               FROM activity_logs
+               WHERE session_token != ''
+               GROUP BY session_token
+               ORDER BY last_seen DESC LIMIT 50"""
+        )
+        return [dict(r) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+
+# ── IP Blacklist ────────────────────────────────────────────────────
+
+async def blacklist_ip(ip: str, reason: str = "", geo_city: str = "", geo_country: str = ""):
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT OR REPLACE INTO blacklisted_ips (ip, reason, geo_city, geo_country, banned_at) VALUES (?, ?, ?, ?, ?)",
+            (ip, reason, geo_city, geo_country, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def unblacklist_ip(ip: str):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM blacklisted_ips WHERE ip = ?", (ip,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def is_ip_blacklisted(ip: str) -> bool:
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT 1 FROM blacklisted_ips WHERE ip = ?", (ip,))
+        return (await cur.fetchone()) is not None
+    finally:
+        await db.close()
+
+
+async def get_blacklist() -> List[Dict]:
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT * FROM blacklisted_ips ORDER BY banned_at DESC")
+        return [dict(r) for r in await cur.fetchall()]
     finally:
         await db.close()
